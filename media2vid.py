@@ -3,6 +3,17 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v28 - PURE FUNCTION EXTRACTION
+CHANGES:
+- EXTRACTED: Helper functions for better modularity without changing program flow
+- ADDED: extract_person_name() function from inline lambda
+- ADDED: generate_output_filename() for timestamp generation
+- ADDED: get_media_extensions() for centralized extension management
+- ADDED: is_temp_file() for file filtering logic
+- ADDED: categorize_media_files() for file categorization
+- IMPROVED: Type hints and docstrings for parse_range(), get_stream_info(), print_stream_info()
+- FIXED: Added missing FFmpeg execution for intro file processing
+
 VERSION: v27 - DRAWTEXT QUOTE FIX
 CHANGES:
 - FIXED: Removed double quotes from drawtext filter to prevent literal quote display
@@ -109,7 +120,7 @@ import shutil
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Set
 
 try:
     from colorama import init, Fore, Style
@@ -121,6 +132,160 @@ except ImportError:
         GREEN = RED = YELLOW = CYAN = MAGENTA = WHITE = ""
     class Style:
         RESET_ALL = ""
+
+# =============================================================================
+# HELPER FUNCTIONS - EXTRACTED FOR MODULARITY (v28)
+# =============================================================================
+
+def extract_person_name(filename: str) -> str:
+    """
+    Extract person name from filename for sorting.
+    
+    Looks for pattern " - PersonName.extension" and extracts the PersonName portion.
+    If pattern not found, returns the full filename in lowercase.
+    
+    Args:
+        filename: The filename to extract person name from
+        
+    Returns:
+        The extracted person name in lowercase, or full filename if pattern not found
+        
+    Examples:
+        >>> extract_person_name("Interview - John Doe.mp4")
+        'john doe'
+        >>> extract_person_name("random_video.mp4")
+        'random_video.mp4'
+    """
+    match = re.search(r' - (.+)\.[^.]+$', filename)
+    return match.group(1).lower() if match else filename.lower()
+
+def generate_output_filename() -> str:
+    """
+    Generate timestamped output filename based on current directory name.
+    
+    Creates filename in format: DirectoryName-MERGED-YYYYMMDD_HHMMSS.mp4
+    Sanitizes directory name to remove invalid filename characters.
+    Limits directory name to 35 characters to prevent overly long filenames.
+    
+    Returns:
+        The generated output filename string
+        
+    Example:
+        >>> # If current directory is "My Videos" at 2024-03-15 14:30:45
+        >>> generate_output_filename()
+        'My Videos-MERGED-20240315_143045.mp4'
+    """
+    current_dir = Path.cwd().name
+    sanitized_dir_name = re.sub(r'[<>:"/\\|?*]', '_', current_dir)
+    output_base_name = sanitized_dir_name[:35]  # First 35 characters
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{output_base_name}-MERGED-{timestamp}.mp4"
+
+def get_media_extensions() -> Tuple[Set[str], Set[str]]:
+    """
+    Get the sets of supported video and audio file extensions.
+    
+    Returns:
+        A tuple containing:
+        - Set of video extensions (12 formats)
+        - Set of audio extensions (9 formats)
+        
+    Note:
+        Extensions are returned in lowercase for case-insensitive matching.
+    """
+    video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', 
+                       '.webm', '.m4v', '.3gp', '.ts', '.mts', '.vob'}
+    audio_extensions = {'.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg', 
+                       '.wma', '.opus', '.mp2'}
+    return video_extensions, audio_extensions
+
+def is_temp_file(file_path: Path) -> bool:
+    """
+    Check if a file should be excluded from processing.
+    
+    Excludes:
+    - Temporary files (temp_*.mp4)
+    - Previous merged outputs (*-MERGED-*.mp4)
+    - Hidden files (starting with . or ~)
+    - System files (filelist.txt)
+    - Script files (.py, .ps1)
+    
+    Args:
+        file_path: Path object to check
+        
+    Returns:
+        True if file should be excluded, False otherwise
+    """
+    if not file_path.is_file():
+        return True
+        
+    # Check for temp files
+    if re.match(r'^temp_\d+\.mp4$', file_path.name):
+        return True
+        
+    # Check for previous merged outputs
+    if re.search(r'-MERGED-.*\.mp4$', file_path.name):
+        return True
+        
+    # Check for hidden/system files
+    if file_path.name.startswith('.') or file_path.name.startswith('~'):
+        return True
+        
+    # Check for specific files to exclude
+    if file_path.name == 'filelist.txt':
+        return True
+        
+    # Check for script files
+    if file_path.suffix.lower() in {'.py', '.ps1'}:
+        return True
+        
+    return False
+
+def categorize_media_files(all_files: List[Path]) -> Dict[str, List[str]]:
+    """
+    Categorize files into video, audio, intro (PNG), and ignored files.
+    
+    Args:
+        all_files: List of Path objects to categorize
+        
+    Returns:
+        Dictionary with keys 'video', 'audio', 'intro', 'ignored' 
+        containing lists of filenames (not Path objects)
+        
+    Note:
+        - PNG files are categorized as 'intro' files
+        - Files are sorted by person name within video and audio categories
+        - Extension matching is case-insensitive
+    """
+    video_extensions, audio_extensions = get_media_extensions()
+    
+    video_files = []
+    audio_files = []
+    intro_files = []
+    ignored_files = []
+    
+    for file_path in all_files:
+        extension = file_path.suffix.lower()
+        
+        if extension == '.png':
+            intro_files.append(file_path.name)
+        elif extension in video_extensions:
+            video_files.append(file_path.name)
+        elif extension in audio_extensions:
+            audio_files.append(file_path.name)
+        else:
+            ignored_files.append(file_path.name)
+    
+    # Sort video and audio files by person name
+    video_files.sort(key=extract_person_name)
+    audio_files.sort(key=extract_person_name)
+    
+    return {
+        'video': video_files,
+        'audio': audio_files,
+        'intro': intro_files,
+        'ignored': ignored_files
+    }
 
 # =============================================================================
 # FFMPEG COMMAND BUILDER - CENTRALIZED STANDARDIZATION
@@ -156,8 +321,22 @@ def get_audio_filter() -> str:
     """
     return 'aresample=48000,aformat=channel_layouts=stereo,loudnorm=I=-16:TP=-1.5:LRA=11'
 
-def get_stream_info(file_path: str) -> dict:
-    """Get basic stream information from a media file."""
+def get_stream_info(file_path: str) -> Dict[str, Optional[Dict[str, str]]]:
+    """
+    Get basic stream information from a media file.
+    
+    Args:
+        file_path: Path to the media file to analyze
+        
+    Returns:
+        Dictionary with 'video' and 'audio' keys, each containing stream info
+        or None if that stream type is not present
+        
+    Example:
+        >>> info = get_stream_info("video.mp4")
+        >>> info['video']['resolution']
+        '1920x1080'
+    """
     cmd = [
         'ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', file_path
     ]
@@ -197,8 +376,14 @@ def get_stream_info(file_path: str) -> dict:
     except:
         return {'video': None, 'audio': None}
 
-def print_stream_info(file_path: str, prefix: str = "  "):
-    """Print formatted stream information."""
+def print_stream_info(file_path: str, prefix: str = "  ") -> None:
+    """
+    Print formatted stream information for a media file.
+    
+    Args:
+        file_path: Path to the media file
+        prefix: String to prefix each output line with (for indentation)
+    """
     info = get_stream_info(file_path)
     
     if info['video']:
@@ -281,7 +466,24 @@ def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path
         return False
 
 def parse_range(range_str: str, max_files: int) -> List[int]:
-    """Parse range string like '1-5' or '3' into list of indices."""
+    """
+    Parse range string like '1-5' or '3' into list of indices.
+    
+    Args:
+        range_str: String containing range (e.g., '1-5') or single number
+        max_files: Maximum valid file index
+        
+    Returns:
+        List of indices within valid range, or empty list if invalid input
+        
+    Examples:
+        >>> parse_range('1-5', 10)
+        [1, 2, 3, 4, 5]
+        >>> parse_range('3', 10)
+        [3]
+        >>> parse_range('', 5)
+        [1, 2, 3, 4, 5]
+    """
     range_str = range_str.strip()
     
     if not range_str:
@@ -356,11 +558,7 @@ def find_audio_background(filename: str, title_screen_path: Optional[Path] = Non
 print(f"{Fore.GREEN}=== Starting Video Processing ==={Style.RESET_ALL}")
 
 # Generate timestamped output filename to avoid conflicts with previous runs
-current_dir = Path.cwd().name
-sanitized_dir_name = re.sub(r'[<>:"/\\|?*]', '_', current_dir)
-output_base_name = sanitized_dir_name[:35]  # First 35 characters
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-final_output_file = f"{output_base_name}-MERGED-{timestamp}.mp4"
+final_output_file = generate_output_filename()
 
 print(f"{Fore.YELLOW}Output file will be: {final_output_file}{Style.RESET_ALL}")
 
@@ -370,52 +568,23 @@ print(f"{Fore.YELLOW}Output file will be: {final_output_file}{Style.RESET_ALL}")
 
 print(f"{Fore.YELLOW}Auto-detecting and sorting media files...{Style.RESET_ALL}")
 
-# Define comprehensive media extensions (case will be handled in matching)
-video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ts', '.mts', '.vob'}
-audio_extensions = {'.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg', '.wma', '.opus', '.mp2'}
-
 # Get all files in current directory, excluding temp files and system files
 all_files = []
 for file_path in Path('.').iterdir():
-    if (file_path.is_file() and 
-        not re.match(r'^temp_\d+\.mp4$', file_path.name) and  # Not temp_*.mp4 files
-        not re.search(r'-MERGED-.*\.mp4$', file_path.name) and  # Not previous merged output files
-        not file_path.name.startswith('.') and not file_path.name.startswith('~') and  # Not hidden/temp system files
-        file_path.name != 'filelist.txt' and  # Not our concatenation file
-        file_path.suffix.lower() not in {'.py', '.ps1'}):  # Not script files
+    if not is_temp_file(file_path):
         all_files.append(file_path)
 
-# Separate files into categories
-video_files = []
-audio_files = []
-intro_files = []
-ignored_files = []
-
-for file_path in all_files:
-    extension = file_path.suffix.lower()
-    
-    if extension == '.png':
-        intro_files.append(file_path.name)
-    elif extension in video_extensions:
-        video_files.append(file_path.name)
-    elif extension in audio_extensions:
-        audio_files.append(file_path.name)
-    else:
-        ignored_files.append(file_path.name)
+# Categorize files
+media_files = categorize_media_files(all_files)
+video_files = media_files['video']
+audio_files = media_files['audio']
+intro_files = media_files['intro']
+ignored_files = media_files['ignored']
 
 # Cache title screen path for later use in audio processing
 title_screen_path = None
 if intro_files:
     title_screen_path = Path(intro_files[0])  # Store the first PNG as title screen
-
-# Sort both media arrays by person name (text after " - "), case-insensitive
-def extract_person_name(filename: str) -> str:
-    """Extract person name from filename for sorting."""
-    match = re.search(r' - (.+)\.[^.]+$', filename)
-    return match.group(1).lower() if match else filename.lower()
-
-video_files.sort(key=extract_person_name)
-audio_files.sort(key=extract_person_name)
 
 # Create processing order list with proper numbering
 processing_order = []
@@ -478,6 +647,7 @@ print()
 total_media_files = len(processing_order)
 if total_media_files == 0:
     print(f"{Fore.RED}ERROR: No supported media files found!{Style.RESET_ALL}")
+    video_extensions, audio_extensions = get_media_extensions()
     print(f"{Fore.YELLOW}Supported video: {', '.join(sorted(video_extensions))}{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}Supported audio: {', '.join(sorted(audio_extensions))}{Style.RESET_ALL}")
     sys.exit(1)
@@ -694,6 +864,11 @@ if processing_order:  # Only process if there are files to process
                 '-vf', get_video_filter(),  # Standard video scaling/padding
                 '-shortest'  # End when shortest stream (3 seconds) ends
             ] + build_base_ffmpeg_cmd(safe_name, duration=3)[2:]  # Skip 'ffmpeg -y' from base
+            
+            # Execute the FFmpeg command for intro processing
+            if not run_ffmpeg_with_error_handling(cmd, f"intro file {filename}", str(safe_name)):
+                print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
+                sys.exit(1)
             
         elif file_type == 'AUDIO':
             print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
