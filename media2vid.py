@@ -291,24 +291,32 @@ def categorize_media_files(all_files: List[Path]) -> Dict[str, List[str]]:
 # FFMPEG COMMAND BUILDER - CENTRALIZED STANDARDIZATION
 # =============================================================================
 
-def build_base_ffmpeg_cmd(output_path: str, duration: int = 15) -> List[str]:
+def build_base_ffmpeg_cmd(output_path: str, duration: int = 15, use_gpu: bool = False) -> List[str]:
     """
     Build the base FFmpeg command with standardized output settings.
     All processed files will have identical specs for seamless concatenation.
+    GPU encoding via h264_nvenc is used if use_gpu is True; otherwise, CPU (libx264).
     """
+    if use_gpu:
+        #video_codec = ['-c:v', 'h264_nvenc', '-preset', 'fast', '-b:v', '4M'] # Always 4Mbps, file may be big
+        video_codec = ['-c:v', 'h264_nvenc', '-preset', 'fast', '-rc:v', 'vbr', '-cq:v', '23', '-b:v', '0'] # CQ (constant quality, VBR)
+
+    else:
+        video_codec = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '23']
+
     return [
-        'ffmpeg', '-y',  # Base command with overwrite
-        # OUTPUT VIDEO SPECS: 1920x1080, 30fps, H.264 High profile, yuv420p, CRF 23
-        # Force colorspace consistency to prevent concatenation issues
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+        'ffmpeg', '-y',
+        # VIDEO CODEC AND SPECS
+        *video_codec,
         '-pix_fmt', 'yuv420p', '-profile:v', 'high',
         '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv',
-        # OUTPUT AUDIO SPECS: 48kHz stereo, AAC, 128kbps
+        # AUDIO SPECS
         '-c:a', 'aac', '-ar', '48000', '-b:a', '128k',
-        # DURATION: Crop to specified seconds for consistency
+        # DURATION
         '-t', str(duration),
         str(output_path)
     ]
+
 
 def get_video_filter() -> str:
     """Standard video filter for consistent 1920x1080 output with aspect ratio preservation."""
