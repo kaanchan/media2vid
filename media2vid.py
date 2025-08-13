@@ -3,6 +3,11 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v27 - DRAWTEXT QUOTE FIX
+CHANGES:
+- FIXED: Removed double quotes from drawtext filter to prevent literal quote display
+- NOTE: filelist.txt already correctly placed in temp_ folder
+
 VERSION: v26 - ENHANCED AUDIO BACKGROUNDS
 CHANGES:
 - NEW: Enhanced audio background search - same filename.png, audio_background.png, title screen, then black
@@ -706,7 +711,7 @@ if processing_order:  # Only process if there are files to process
                     'ffmpeg', '-y',
                     '-loop', '1', '-i', str(background_path),  # Background image
                     '-i', filename,  # Audio file
-                    '-vf', f'scale=1920:1080,drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text=\"{text_overlay_escaped}\"',
+                    '-vf', f'scale=1920:1080,drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
                     '-af', get_audio_filter(),
                     '-shortest'  # End when audio ends
                 ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
@@ -720,7 +725,7 @@ if processing_order:  # Only process if there are files to process
                         'ffmpeg', '-y',
                         '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
                         '-i', filename,  # Audio file
-                        '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text=\"{text_overlay_escaped}\"',
+                        '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
                         '-af', get_audio_filter(),
                         '-shortest'  # End when audio ends
                     ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
@@ -737,7 +742,7 @@ if processing_order:  # Only process if there are files to process
                     'ffmpeg', '-y',
                     '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
                     '-i', filename,  # Audio file
-                    '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text=\"{text_overlay_escaped}\"',
+                    '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
                     '-af', get_audio_filter(),
                     '-shortest'  # End when audio ends
                 ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
