@@ -1,3 +1,21 @@
+# Project specific directories and files
+temp_/
+*.cache
+filelist.txt
+LOGS/
+*.log
+OUTPUT/
+*.mp4
+INPUT/
+*.png
+*.jpg
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.mov
+ARCHIVED/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
