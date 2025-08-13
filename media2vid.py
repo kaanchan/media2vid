@@ -3,6 +3,22 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v26 - ENHANCED AUDIO BACKGROUNDS
+CHANGES:
+- NEW: Enhanced audio background search - same filename.png, audio_background.png, title screen, then black
+- FIXED: Proper colon escaping in drawtext filter (double backslash)
+- UPDATED: Font size increased to 36pt for better readability
+- NEW: Case-insensitive PNG matching for audio backgrounds
+- NEW: Fallback cascade with warnings for failed background images
+
+VERSION: v25 - FIXED AUDIO FILTER
+CHANGES: 
+- Merged complete processing loop from v16 into v23 base
+- Preserved improved error handling from v23
+- Added colorspace consistency settings from v16
+- Restored working INTRO/VIDEO/AUDIO processing logic
+- FIXED: Replaced channelmap with aformat for robust mono/stereo handling
+
 VERSION: v24 - WORKING MERGED
 CHANGES: 
 - Merged complete processing loop from v16 into v23 base
@@ -10,6 +26,7 @@ CHANGES:
 - Added colorspace consistency settings from v16
 - Restored working INTRO/VIDEO/AUDIO processing logic
 - FIXED: Replaced channelmap with aformat for robust mono/stereo handling
+
 
 DESCRIPTION:
     This Python script performs comprehensive video montage creation with the following features:
@@ -292,6 +309,41 @@ def parse_range(range_str: str, max_files: int) -> List[int]:
             print(f"{Fore.RED}Invalid number format.{Style.RESET_ALL}")
             return []
 
+def find_audio_background(filename: str, title_screen_path: Optional[Path] = None) -> Tuple[Optional[Path], str]:
+    """
+    Find appropriate background image for audio file following the hierarchy:
+    1. Same filename with .png extension (case-insensitive)
+    2. audio_background.png
+    3. Title screen image (if available)
+    4. None (will use black background)
+    
+    Returns: (Path or None, description string)
+    """
+    # 1. Check for same-name PNG (case-insensitive)
+    base_name = Path(filename).stem  # Get filename without extension
+    
+    # Search for case-insensitive match
+    for file in Path('.').iterdir():
+        if file.is_file() and file.suffix.lower() == '.png':
+            if file.stem.lower() == base_name.lower():
+                print(f"{Fore.WHITE}  -> Found matching PNG: {file.name}{Style.RESET_ALL}")
+                return (file, f"same-name PNG ({file.name})")
+    
+    # 2. Check for audio_background.png
+    audio_bg_path = Path('audio_background.png')
+    if audio_bg_path.exists():
+        print(f"{Fore.WHITE}  -> Found audio_background.png{Style.RESET_ALL}")
+        return (audio_bg_path, "audio_background.png")
+    
+    # 3. Use title screen if available
+    if title_screen_path and title_screen_path.exists():
+        print(f"{Fore.WHITE}  -> Using title screen image: {title_screen_path.name}{Style.RESET_ALL}")
+        return (title_screen_path, f"title screen ({title_screen_path.name})")
+    
+    # 4. No image found - will use black background
+    print(f"{Fore.WHITE}  -> No background image found, using black background{Style.RESET_ALL}")
+    return (None, "black background")
+
 # =============================================================================
 # INITIALIZATION AND OUTPUT FILENAME GENERATION
 # =============================================================================
@@ -345,6 +397,11 @@ for file_path in all_files:
         audio_files.append(file_path.name)
     else:
         ignored_files.append(file_path.name)
+
+# Cache title screen path for later use in audio processing
+title_screen_path = None
+if intro_files:
+    title_screen_path = Path(intro_files[0])  # Store the first PNG as title screen
 
 # Sort both media arrays by person name (text after " - "), case-insensitive
 def extract_person_name(filename: str) -> str:
@@ -635,20 +692,59 @@ if processing_order:  # Only process if there are files to process
             
         elif file_type == 'AUDIO':
             print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
-            print(f"{Fore.WHITE}  -> Creating waveform video (no text overlay)...{Style.RESET_ALL}")
             
-            # Remove any existing temp file to ensure fresh waveform generation
-            if safe_name.exists():
-                safe_name.unlink()
+            # Find appropriate background using new search logic
+            background_path, bg_description = find_audio_background(filename, title_screen_path)
             
-            # Create standardized waveform visualization with proper audio handling
-            filter_complex = f'[0:a]{get_audio_filter()},asplit=2[a][vis];[vis]showwaves=s=1920x1080:mode=cline:colors=cyan:scale=lin[wave]'
+            # Prepare text overlay with proper colon escaping
+            text_overlay = f"Audio only submission: {filename}"
+            text_overlay_escaped = text_overlay.replace(":", "\\\\:")
             
-            cmd = [
-                'ffmpeg', '-y', '-i', filename,
-                '-filter_complex', filter_complex,
-                '-map', '[wave]', '-map', '[a]'
-            ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+            if background_path:
+                # Try to use the found background image
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-loop', '1', '-i', str(background_path),  # Background image
+                    '-i', filename,  # Audio file
+                    '-vf', f'scale=1920:1080,drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text=\"{text_overlay_escaped}\"',
+                    '-af', get_audio_filter(),
+                    '-shortest'  # End when audio ends
+                ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+                
+                # Try the command, fall back if it fails
+                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with {bg_description}", str(safe_name)):
+                    print(f"{Fore.YELLOW}  WARNING: Failed to use {bg_description}, falling back to black background{Style.RESET_ALL}")
+                    
+                    # Fallback to black background
+                    cmd = [
+                        'ffmpeg', '-y',
+                        '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
+                        '-i', filename,  # Audio file
+                        '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text=\"{text_overlay_escaped}\"',
+                        '-af', get_audio_filter(),
+                        '-shortest'  # End when audio ends
+                    ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+                    
+                    if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name)):
+                        print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
+                        sys.exit(1)
+                else:
+                    # Success with background image, continue to next file
+                    continue
+            else:
+                # No background image found, use black background directly
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
+                    '-i', filename,  # Audio file
+                    '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text=\"{text_overlay_escaped}\"',
+                    '-af', get_audio_filter(),
+                    '-shortest'  # End when audio ends
+                ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+                
+                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name)):
+                    print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
+                    sys.exit(1)
             
         else:  # VIDEO
             print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
@@ -661,10 +757,10 @@ if processing_order:  # Only process if there are files to process
                 '-af', get_audio_filter()
             ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
         
-        # Process file and exit on failure to prevent corrupted output
-        if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name)):
-            print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
-            sys.exit(1)
+            # Process file and exit on failure to prevent corrupted output
+            if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name)):
+                print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
+                sys.exit(1)
 
 # =============================================================================
 # FINAL CONCATENATION AND OUTPUT GENERATION
