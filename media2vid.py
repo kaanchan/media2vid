@@ -3,6 +3,14 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v24 - WORKING MERGED
+CHANGES: 
+- Merged complete processing loop from v16 into v23 base
+- Preserved improved error handling from v23
+- Added colorspace consistency settings from v16
+- Restored working INTRO/VIDEO/AUDIO processing logic
+- FIXED: Replaced channelmap with aformat for robust mono/stereo handling
+
 DESCRIPTION:
     This Python script performs comprehensive video montage creation with the following features:
     
@@ -104,8 +112,10 @@ def build_base_ffmpeg_cmd(output_path: str, duration: int = 15) -> List[str]:
     return [
         'ffmpeg', '-y',  # Base command with overwrite
         # OUTPUT VIDEO SPECS: 1920x1080, 30fps, H.264 High profile, yuv420p, CRF 23
+        # Force colorspace consistency to prevent concatenation issues
         '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
         '-pix_fmt', 'yuv420p', '-profile:v', 'high',
+        '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv',
         # OUTPUT AUDIO SPECS: 48kHz stereo, AAC, 128kbps
         '-c:a', 'aac', '-ar', '48000', '-b:a', '128k',
         # DURATION: Crop to specified seconds for consistency
@@ -122,7 +132,7 @@ def get_audio_filter() -> str:
     Standard audio filter with robust channel handling and EBU R128 normalization.
     Handles mono, stereo, and multi-channel inputs gracefully.
     """
-    return 'aresample=48000,channelmap=channel_layout=stereo,loudnorm=I=-16:TP=-1.5:LRA=11'
+    return 'aresample=48000,aformat=channel_layouts=stereo,loudnorm=I=-16:TP=-1.5:LRA=11'
 
 def get_stream_info(file_path: str) -> dict:
     """Get basic stream information from a media file."""
@@ -610,7 +620,51 @@ if processing_order:  # Only process if there are files to process
         # Use original index for temp file naming
         safe_name = temp_dir / f"temp_{index-1}.mp4"
         
-
+        if file_type == 'INTRO':
+            print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing title screen image: {filename}{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}  -> Creating 3-second intro with silent audio track...{Style.RESET_ALL}")
+            
+            # Convert PNG to 3-second video using the same standardized settings as all other media
+            cmd = [
+                'ffmpeg', '-y',
+                '-loop', '1', '-i', str(filename),  # Loop the image
+                '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',  # Silent audio
+                '-vf', get_video_filter(),  # Standard video scaling/padding
+                '-shortest'  # End when shortest stream (3 seconds) ends
+            ] + build_base_ffmpeg_cmd(safe_name, duration=3)[2:]  # Skip 'ffmpeg -y' from base
+            
+        elif file_type == 'AUDIO':
+            print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}  -> Creating waveform video (no text overlay)...{Style.RESET_ALL}")
+            
+            # Remove any existing temp file to ensure fresh waveform generation
+            if safe_name.exists():
+                safe_name.unlink()
+            
+            # Create standardized waveform visualization with proper audio handling
+            filter_complex = f'[0:a]{get_audio_filter()},asplit=2[a][vis];[vis]showwaves=s=1920x1080:mode=cline:colors=cyan:scale=lin[wave]'
+            
+            cmd = [
+                'ffmpeg', '-y', '-i', filename,
+                '-filter_complex', filter_complex,
+                '-map', '[wave]', '-map', '[a]'
+            ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+            
+        else:  # VIDEO
+            print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}  -> Processing video file...{Style.RESET_ALL}")
+            
+            # Apply comprehensive standardization using centralized functions
+            cmd = [
+                'ffmpeg', '-y', '-i', filename,
+                '-vf', get_video_filter(),
+                '-af', get_audio_filter()
+            ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+        
+        # Process file and exit on failure to prevent corrupted output
+        if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name)):
+            print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
+            sys.exit(1)
 
 # =============================================================================
 # FINAL CONCATENATION AND OUTPUT GENERATION
