@@ -3,6 +3,16 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v29B - OPERATION BEHAVIOR AND ORGANIZATION
+CHANGES:
+- ADDED: C operation to clear cache (delete temp_ directory and all .cache files)
+- ADDED: O operation to organize directory into INPUT/OUTPUT/LOGS folders with overwrite prompts
+- ADDED: Directory path detection at startup - checks for existing INPUT/OUTPUT/LOGS directories
+- MODIFIED: R and M operations preserve temp directory instead of clearing it
+- ADDED: Range indicators in output filenames (Ma_b, Ra_b, M3, R5 for range operations)
+- IMPROVED: File detection searches INPUT directory if it exists, with empty directory warning
+- ADDED: Overwrite prompts with 3-second timeout defaulting to "No Overwrite"
+
 VERSION: v29b - CODEC NORMALIZATION FIX
 CHANGES:
 - ADDED: normalize_codec_name() function to handle FFmpeg command vs metadata codec name mismatches
@@ -102,11 +112,13 @@ DESCRIPTION:
     - Shows ignored files with reasons for exclusion
     - Provides 20-second countdown with interactive pause/continue/cancel options
     - Range processing (R) and selective merging (M) options
+    - Cache clearing (C) and directory organization (O) operations
     - Includes progress tracking for each file processed
     - Timed cleanup prompt (5 seconds) with default to preserve temp files
     
     OUTPUT & CLEANUP:
     - Creates timestamped output files (DirectoryName-MERGED-yyyymmdd_hhmmss.mp4)
+    - Range operations append indicators (Ma_b, Ra_b, M3, R5) to filenames
     - Uses optimized concatenation with stream copy when possible
     - Offers optional cleanup of temporary files after successful completion
     - Preserves temp files for debugging if processing fails
@@ -167,6 +179,15 @@ except ImportError:
 use_cache = True
 
 # =============================================================================
+# DIRECTORY STRUCTURE DETECTION (v29B)
+# =============================================================================
+
+# Check for existing INPUT/OUTPUT/LOGS directories and set path variables
+input_dir = Path("INPUT") if Path("INPUT").exists() else Path(".")
+output_dir = Path("OUTPUT") if Path("OUTPUT").exists() else Path(".")
+logs_dir = Path("LOGS") if Path("LOGS").exists() else Path(".")
+
+# =============================================================================
 # HELPER FUNCTIONS - EXTRACTED FOR MODULARITY (v28)
 # =============================================================================
 
@@ -192,27 +213,32 @@ def extract_person_name(filename: str) -> str:
     match = re.search(r' - (.+)\.[^.]+$', filename)
     return match.group(1).lower() if match else filename.lower()
 
-def generate_output_filename() -> str:
+def generate_output_filename(range_info: Optional[str] = None) -> str:
     """
     Generate timestamped output filename based on current directory name.
     
-    Creates filename in format: DirectoryName-MERGED-YYYYMMDD_HHMMSS.mp4
-    Sanitizes directory name to remove invalid filename characters.
-    Limits directory name to 35 characters to prevent overly long filenames.
+    Creates filename in format: DirectoryName-MERGED-yyyymmdd_hhmmss.mp4
+    Or with range indicators: DirectoryName-Ma_b-yyyymmdd_hhmmss.mp4
     
+    Args:
+        range_info: Optional range indicator (e.g., 'M1_5', 'R3_7', 'M3', 'R5')
+        
     Returns:
         The generated output filename string
         
     Example:
-        >>> # If current directory is "My Videos" at 2024-03-15 14:30:45
-        >>> generate_output_filename()
-        'My Videos-MERGED-20240315_143045.mp4'
+        >>> generate_output_filename('M1_5')
+        'My Videos-M1_5-20240315_143045.mp4'
     """
     current_dir = Path.cwd().name
     sanitized_dir_name = re.sub(r'[<>:"/\\|?*]', '_', current_dir)
     output_base_name = sanitized_dir_name[:35]  # First 35 characters
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{output_base_name}-MERGED-{timestamp}.mp4"
+    
+    if range_info:
+        return f"{output_base_name}-{range_info}-{timestamp}.mp4"
+    else:
+        return f"{output_base_name}-MERGED-{timestamp}.mp4"
 
 def get_media_extensions() -> Tuple[Set[str], Set[str]]:
     """
@@ -258,6 +284,10 @@ def is_temp_file(file_path: Path) -> bool:
         
     # Check for previous merged outputs
     if re.search(r'-MERGED-.*\.mp4$', file_path.name):
+        return True
+        
+    # Check for range merged outputs
+    if re.search(r'-(M|R)\d+(_\d+)?-.*\.mp4$', file_path.name):
         return True
         
     # Check for hidden/system files
@@ -319,6 +349,210 @@ def categorize_media_files(all_files: List[Path]) -> Dict[str, List[str]]:
         'intro': intro_files,
         'ignored': ignored_files
     }
+
+# =============================================================================
+# NEW OPERATIONS (v29B)
+# =============================================================================
+
+def get_overwrite_confirmation(filename: str) -> bool:
+    """
+    Get overwrite confirmation with 3-second timeout defaulting to No.
+    
+    Args:
+        filename: Name of file that would be overwritten
+        
+    Returns:
+        True if user wants to overwrite, False otherwise
+    """
+    print(f"{Fore.YELLOW}File exists: {filename} - Overwrite? (y/N - defaults to N in 3 seconds): {Style.RESET_ALL}", 
+          end="", flush=True)
+    
+    # Use threading for non-blocking input with timeout
+    input_result = [None]
+    
+    def get_input():
+        try:
+            input_result[0] = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            input_result[0] = "n"
+    
+    # Start input thread
+    input_thread = threading.Thread(target=get_input, daemon=True)
+    input_thread.start()
+    
+    # Wait up to 3 seconds for input
+    start_time = time.time()
+    while time.time() - start_time < 3.0:
+        if input_result[0] is not None:
+            break
+        time.sleep(0.1)
+    
+    # Get result or default to 'n'
+    response = input_result[0] if input_result[0] is not None else "n"
+    
+    if input_result[0] is None:
+        print("n (timed out)")
+    
+    return response in ['y', 'yes']
+
+def organize_directory() -> None:
+    """
+    Organize directory into INPUT/OUTPUT/LOGS folders with overwrite prompts.
+    
+    Creates directories if they don't exist and moves files:
+    - Media files → INPUT/
+    - -MERGED-.mp4 files → OUTPUT/
+    - *.log files → LOGS/
+    """
+    print(f"{Fore.CYAN}=== Organizing Directory ==={Style.RESET_ALL}")
+    
+    current_dir = Path('.')
+    video_extensions, audio_extensions = get_media_extensions()
+    all_extensions = video_extensions | audio_extensions | {'.png'}
+    
+    # Create directories if they don't exist
+    input_path = Path("INPUT")
+    output_path = Path("OUTPUT") 
+    logs_path = Path("LOGS")
+    
+    input_path.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True)
+    logs_path.mkdir(exist_ok=True)
+    
+    moved_count = 0
+    skipped_count = 0
+    
+    # First pass: Handle -MERGED- files specifically (bypass is_temp_file check)
+    for file_path in current_dir.iterdir():
+        if not file_path.is_file():
+            continue
+            
+        # Skip files already in target directories
+        if file_path.parent.name in ['INPUT', 'OUTPUT', 'LOGS']:
+            continue
+            
+        # Handle -MERGED- files specifically (including range indicators like -M1_2- and -M3-)
+        # Only consider video files to prevent false positives
+        if (file_path.suffix.lower() in video_extensions and 
+            re.search(r'-(merged|M\d+(_\d+)?)-', file_path.name, re.IGNORECASE)):
+            destination = output_path / file_path.name
+            
+            # Check if destination exists
+            if destination.exists():
+                if get_overwrite_confirmation(str(destination)):
+                    file_path.rename(destination)
+                    print(f"{Fore.GREEN}  ✓ Moved: {file_path.name} → {destination.parent.name}/{Style.RESET_ALL}")
+                    moved_count += 1
+                else:
+                    print(f"{Fore.YELLOW}  ⊘ Skipped: {file_path.name} (already exists){Style.RESET_ALL}")
+                    skipped_count += 1
+            else:
+                file_path.rename(destination)
+                print(f"{Fore.GREEN}  ✓ Moved: {file_path.name} → {destination.parent.name}/{Style.RESET_ALL}")
+                moved_count += 1
+    
+    # Second pass: Handle other files with normal filtering
+    for file_path in current_dir.iterdir():
+        if not file_path.is_file():
+            continue
+            
+        # Skip files already in target directories
+        if file_path.parent.name in ['INPUT', 'OUTPUT', 'LOGS']:
+            continue
+            
+        # Skip script files and temp files (this excludes -MERGED- files, but we handled them above)
+        if is_temp_file(file_path):
+            continue
+            
+        # Skip -MERGED- files (including range indicators) since we handled them in first pass
+        if (file_path.suffix.lower() in video_extensions and 
+            re.search(r'-(merged|M\d+(_\d+)?)-', file_path.name, re.IGNORECASE)):
+            continue
+            
+        destination = None
+        
+        # Determine destination for remaining files
+        if file_path.suffix.lower() == '.log':
+            destination = logs_path / file_path.name
+        elif file_path.suffix.lower() in all_extensions:
+            destination = input_path / file_path.name
+        
+        if destination:
+            # Check if destination exists
+            if destination.exists():
+                if get_overwrite_confirmation(str(destination)):
+                    file_path.rename(destination)
+                    print(f"{Fore.GREEN}  ✓ Moved: {file_path.name} → {destination.parent.name}/{Style.RESET_ALL}")
+                    moved_count += 1
+                else:
+                    print(f"{Fore.YELLOW}  ⊘ Skipped: {file_path.name} (already exists){Style.RESET_ALL}")
+                    skipped_count += 1
+            else:
+                file_path.rename(destination)
+                print(f"{Fore.GREEN}  ✓ Moved: {file_path.name} → {destination.parent.name}/{Style.RESET_ALL}")
+                moved_count += 1
+    
+    print(f"{Fore.GREEN}Organization complete: {moved_count} files moved, {skipped_count} skipped{Style.RESET_ALL}")
+
+def clear_cache() -> None:
+    """
+    Clear cache by deleting temp_ directory and all .cache files.
+    """
+    print(f"{Fore.CYAN}=== Clearing Cache ==={Style.RESET_ALL}")
+    
+    removed_count = 0
+    
+    # Remove temp_ directory
+    temp_dir = Path("temp_")
+    if temp_dir.exists():
+        try:
+            shutil.rmtree(temp_dir)
+            print(f"{Fore.GREEN}  ✓ Removed temp_ directory{Style.RESET_ALL}")
+            removed_count += 1
+        except Exception as e:
+            print(f"{Fore.RED}  ✗ Failed to remove temp_ directory: {e}{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.YELLOW}  ⊘ temp_ directory not found{Style.RESET_ALL}")
+    
+    # Remove .cache files
+    current_dir = Path('.')
+    cache_files_removed = 0
+    
+    for cache_file in current_dir.glob("*.cache"):
+        try:
+            cache_file.unlink()
+            cache_files_removed += 1
+        except Exception as e:
+            print(f"{Fore.RED}  ✗ Failed to remove {cache_file.name}: {e}{Style.RESET_ALL}")
+    
+    if cache_files_removed > 0:
+        print(f"{Fore.GREEN}  ✓ Removed {cache_files_removed} .cache files{Style.RESET_ALL}")
+        removed_count += cache_files_removed
+    else:
+        print(f"{Fore.YELLOW}  ⊘ No .cache files found{Style.RESET_ALL}")
+    
+    if removed_count > 0:
+        print(f"{Fore.GREEN}Cache cleared: {removed_count} items removed{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.YELLOW}Cache was already clean{Style.RESET_ALL}")
+
+def format_range_indicator(indices: List[int], operation: str) -> str:
+    """
+    Format range indicator for filename (Ma_b, Ra_b, M3, R5).
+    
+    Args:
+        indices: List of selected indices
+        operation: 'M' for merge or 'R' for range
+        
+    Returns:
+        Formatted range indicator string
+    """
+    if not indices:
+        return f"{operation}0"
+    elif len(indices) == 1:
+        return f"{operation}{indices[0]}"
+    else:
+        return f"{operation}{min(indices)}_{max(indices)}"
 
 # =============================================================================
 # CACHE SYSTEM FUNCTIONS (v29)
@@ -731,12 +965,12 @@ def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path
         description: Description for logging
         output_path: Path where output will be created
         source_file: Source file path for cache validation
-        file_type: Type of file being processed ('INTRO', 'VIDEO', 'AUDIO')
+        file_type: Type of file being processed ('INTRO', 'VIDEO', 'AUDIO', 'CONCAT')
     """
     temp_file_path = Path(output_path)
     
-    # Check cache validity first
-    if use_cache:
+    # Skip cache for final output files (CONCAT type)
+    if use_cache and file_type != 'CONCAT':
         cache_info = get_cache_info(cmd, file_type, source_file)
         
         if is_cached_file_valid(temp_file_path, source_file, cache_info):
@@ -754,8 +988,8 @@ def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"{Fore.GREEN}  ✓ Created: {output_path}{Style.RESET_ALL}")
         
-        # Save cache info for future validation
-        if use_cache:
+        # Save cache info for future validation (skip for final outputs)
+        if use_cache and file_type != 'CONCAT':
             save_cache_info(temp_file_path, cache_info)
         
         # Show stream info for the created file
@@ -814,7 +1048,7 @@ def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path
         # Clean up failed output file and cache
         if Path(output_path).exists():
             Path(output_path).unlink()
-        if use_cache:
+        if use_cache and file_type != 'CONCAT':
             cache_info_file = temp_file_path.with_suffix('.cache')
             if cache_info_file.exists():
                 cache_info_file.unlink()
@@ -882,18 +1116,20 @@ def find_audio_background(filename: str, title_screen_path: Optional[Path] = Non
     
     Returns: (Path or None, description string)
     """
+    search_dir = input_dir  # Use INPUT directory if it exists
+    
     # 1. Check for same-name PNG (case-insensitive)
     base_name = Path(filename).stem  # Get filename without extension
     
     # Search for case-insensitive match
-    for file in Path('.').iterdir():
+    for file in search_dir.iterdir():
         if file.is_file() and file.suffix.lower() == '.png':
             if file.stem.lower() == base_name.lower():
                 print(f"{Fore.WHITE}  -> Found matching PNG: {file.name}{Style.RESET_ALL}")
                 return (file, f"same-name PNG ({file.name})")
     
     # 2. Check for audio_background.png
-    audio_bg_path = Path('audio_background.png')
+    audio_bg_path = search_dir / 'audio_background.png'
     if audio_bg_path.exists():
         print(f"{Fore.WHITE}  -> Found audio_background.png{Style.RESET_ALL}")
         return (audio_bg_path, "audio_background.png")
@@ -945,6 +1181,19 @@ def get_user_input_with_timeout_cleanup():
 
 print(f"{Fore.GREEN}=== Starting Video Processing ==={Style.RESET_ALL}")
 
+# Show directory structure status
+print(f"{Fore.CYAN}Directory structure:{Style.RESET_ALL}")
+print(f"  INPUT: {input_dir}")
+print(f"  OUTPUT: {output_dir}") 
+print(f"  LOGS: {logs_dir}")
+
+# Check for empty INPUT directory warning
+if input_dir.name == "INPUT" and input_dir.exists():
+    input_files = [f for f in input_dir.iterdir() if not is_temp_file(f)]
+    if not input_files:
+        print(f"{Fore.YELLOW}WARNING: INPUT directory exists but is empty!{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Use O operation to organize files into INPUT directory.{Style.RESET_ALL}")
+
 # Show cache status
 if use_cache:
     print(f"{Fore.CYAN}Cache system: ENABLED - will reuse valid temp files{Style.RESET_ALL}")
@@ -962,9 +1211,12 @@ print(f"{Fore.YELLOW}Output file will be: {final_output_file}{Style.RESET_ALL}")
 
 print(f"{Fore.YELLOW}Auto-detecting and sorting media files...{Style.RESET_ALL}")
 
-# Get all files in current directory, excluding temp files and system files
+# Search in INPUT directory if it exists, otherwise current directory
+search_dir = input_dir
+
+# Get all files in search directory, excluding temp files and system files
 all_files = []
-for file_path in Path('.').iterdir():
+for file_path in search_dir.iterdir():
     if not is_temp_file(file_path):
         all_files.append(file_path)
 
@@ -978,7 +1230,7 @@ ignored_files = media_files['ignored']
 # Cache title screen path for later use in audio processing
 title_screen_path = None
 if intro_files:
-    title_screen_path = Path(intro_files[0])  # Store the first PNG as title screen
+    title_screen_path = search_dir / intro_files[0]  # Store the first PNG as title screen
 
 # Create processing order list with proper numbering
 processing_order = []
@@ -1056,8 +1308,10 @@ print()
 print(f"{Fore.WHITE}Options:{Style.RESET_ALL}")
 print(f"{Fore.GREEN}  <Y> or <Enter> - Continue with processing all files{Style.RESET_ALL}")
 print(f"{Fore.YELLOW}  <P> - Pause countdown (requires Y/Enter to resume){Style.RESET_ALL}")
-print(f"{Fore.CYAN}  <R> - Process specific range of files only{Style.RESET_ALL}")
+print(f"{Fore.CYAN}  <R> - Re-render specific range of files (force recreate temp files){Style.RESET_ALL}")
 print(f"{Fore.MAGENTA}  <M> - Merge existing temp files (with optional range){Style.RESET_ALL}")
+print(f"{Fore.WHITE}  <C> - Clear cache (delete temp_ directory and .cache files){Style.RESET_ALL}")
+print(f"{Fore.WHITE}  <O> - Organize directory (move files to INPUT/OUTPUT/LOGS){Style.RESET_ALL}")
 print(f"{Fore.RED}  <N> - Cancel and exit{Style.RESET_ALL}")
 print()
 
@@ -1085,7 +1339,7 @@ def get_user_input_with_timeout():
         if remaining == 0:
             break
             
-        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... (Press P to pause, Y/Enter to continue, R for range, M for merge, N to cancel): {Style.RESET_ALL}", 
+        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... (Y/Enter/P/R=re-render/M=merge/C/O/N): {Style.RESET_ALL}", 
               end="", flush=True)
         
         # Start input thread if not already running
@@ -1102,21 +1356,27 @@ def get_user_input_with_timeout():
                 return 'Y', None
             elif response == 'P':
                 paused = True
-                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press Y/Enter to continue, R for range, M for merge, or N to cancel.{Style.RESET_ALL}")
+                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press Y/Enter to continue, R for range, M for merge, C to clear cache, O to organize, or N to cancel.{Style.RESET_ALL}")
                 break
             elif response == 'R':
-                print(f"\n{Fore.CYAN}Range processing selected.{Style.RESET_ALL}")
+                print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
                 return 'R', None
             elif response == 'M':
                 print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
                 return 'M', None
+            elif response == 'C':
+                print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
+                return 'C', None
+            elif response == 'O':
+                print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
+                return 'O', None
             elif response == 'N':
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 sys.exit(0)
     
     # Handle paused state - wait indefinitely until user input
     while paused:
-        print(f"{Fore.YELLOW}PAUSED - Press Y/Enter to continue, R for range, M for merge, or N to cancel: {Style.RESET_ALL}", 
+        print(f"{Fore.YELLOW}PAUSED - Options: Y/Enter/R/M/C/O/N: {Style.RESET_ALL}", 
               end="", flush=True)
         
         # Reset input for paused state
@@ -1134,16 +1394,22 @@ def get_user_input_with_timeout():
             paused = False
             return 'Y', None
         elif response == 'R':
-            print(f"\n{Fore.CYAN}Range processing selected.{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
             return 'R', None
         elif response == 'M':
             print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
             return 'M', None
+        elif response == 'C':
+            print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
+            return 'C', None
+        elif response == 'O':
+            print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
+            return 'O', None
         elif response == 'N':
             print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
             sys.exit(0)
         else:
-            print(f"\n{Fore.RED}Invalid key. Press Y/Enter to continue, R for range, M for merge, or N to cancel.{Style.RESET_ALL}")
+            print(f"\n{Fore.RED}Invalid key. Press Y/Enter to continue, R for range, M for merge, C to clear cache, O to organize, or N to cancel.{Style.RESET_ALL}")
     
     # Auto-continue message if countdown completed without pause
     if not paused:
@@ -1154,17 +1420,25 @@ def get_user_input_with_timeout():
 # Run the confirmation
 action, _ = get_user_input_with_timeout()
 
-# Handle range processing
+# Handle new operations first
+if action == 'C':
+    clear_cache()
+    sys.exit(0)
+elif action == 'O':
+    organize_directory()
+    sys.exit(0)
+
+# Handle re-render and merge operations
 selected_indices = None
 if action == 'R':
-    print(f"{Fore.CYAN}Enter range to process (e.g., '1-5' or '3' or Enter for all): {Style.RESET_ALL}", end="")
+    print(f"{Fore.CYAN}Enter range to re-render (e.g., '1-5' or '3' or Enter for all): {Style.RESET_ALL}", end="")
     range_input = input().strip()
     selected_indices = parse_range(range_input, total_media_files)
     
     if not selected_indices:
         sys.exit(1)
         
-    print(f"{Fore.GREEN}Will process files: {', '.join(map(str, selected_indices))}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}Will re-render files: {', '.join(map(str, selected_indices))}{Style.RESET_ALL}")
     processing_order = [item for item in processing_order if item[0] in selected_indices]
 
 elif action == 'M':
@@ -1185,11 +1459,36 @@ print(f"{Fore.GREEN}Starting processing...{Style.RESET_ALL}")
 
 # Create dedicated temp directory for organized file management
 temp_dir = Path("temp_")
-if temp_dir.exists():
-    print(f"{Fore.WHITE}Using existing temp directory: {temp_dir}{Style.RESET_ALL}")
+
+# Modified temp directory handling for R/M operations (v29B)
+if action == 'R':
+    # R operation: Re-render selected files, forcing cache invalidation
+    if temp_dir.exists():
+        print(f"{Fore.WHITE}Using existing temp directory for re-rendering: {temp_dir}{Style.RESET_ALL}")
+        # Remove cache files for selected indices to force re-rendering
+        for index, _, _ in processing_order:
+            temp_file_path = temp_dir / f"temp_{index-1}.mp4"
+            cache_file_path = temp_file_path.with_suffix('.cache')
+            if cache_file_path.exists():
+                cache_file_path.unlink()
+                print(f"{Fore.YELLOW}  -> Removed cache for temp_{index-1}.mp4 (forcing re-render){Style.RESET_ALL}")
+    else:
+        temp_dir.mkdir()
+        print(f"{Fore.WHITE}Created temp directory: {temp_dir}{Style.RESET_ALL}")
+elif action == 'M':
+    # M operation: Merge existing temp files, preserve temp directory
+    if temp_dir.exists():
+        print(f"{Fore.WHITE}Preserving existing temp directory for merge operation: {temp_dir}{Style.RESET_ALL}")
+    else:
+        temp_dir.mkdir()
+        print(f"{Fore.WHITE}Created temp directory: {temp_dir}{Style.RESET_ALL}")
 else:
-    temp_dir.mkdir()
-    print(f"{Fore.WHITE}Created temp directory: {temp_dir}{Style.RESET_ALL}")
+    # Normal processing - may clear temp directory
+    if temp_dir.exists():
+        print(f"{Fore.WHITE}Using existing temp directory: {temp_dir}{Style.RESET_ALL}")
+    else:
+        temp_dir.mkdir()
+        print(f"{Fore.WHITE}Created temp directory: {temp_dir}{Style.RESET_ALL}")
 
 # =============================================================================
 # HANDLE MERGE MODE
@@ -1232,6 +1531,11 @@ if action == 'M':
         print(f"{Fore.GREEN}All temp files exist, proceeding to merge...{Style.RESET_ALL}")
         processing_order = []  # Skip processing, go straight to merge
 
+elif action == 'R':
+    # R operation only re-renders files to temp directory, no merging
+    print(f"{Fore.CYAN}Re-rendering selected files to temp directory...{Style.RESET_ALL}")
+    # processing_order is already filtered to selected indices above
+
 # =============================================================================
 # MAIN MEDIA PROCESSING LOOP - STANDARDIZATION TO COMMON FORMAT
 # =============================================================================
@@ -1245,6 +1549,9 @@ if processing_order:  # Only process if there are files to process
         # Use original index for temp file naming
         safe_name = temp_dir / f"temp_{index-1}.mp4"
         
+        # Use full path from search directory
+        full_filename = str(search_dir / filename)
+        
         if file_type == 'INTRO':
             print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing title screen image: {filename}{Style.RESET_ALL}")
             print(f"{Fore.WHITE}  -> Creating 3-second intro with silent audio track...{Style.RESET_ALL}")
@@ -1252,14 +1559,14 @@ if processing_order:  # Only process if there are files to process
             # Convert PNG to 3-second video using the same standardized settings as all other media
             cmd = [
                 'ffmpeg', '-y',
-                '-loop', '1', '-i', str(filename),  # Loop the image
+                '-loop', '1', '-i', full_filename,  # Loop the image
                 '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',  # Silent audio
                 '-vf', get_video_filter(),  # Standard video scaling/padding
                 '-shortest'  # End when shortest stream (3 seconds) ends
             ] + build_base_ffmpeg_cmd(safe_name, duration=3)[2:]  # Skip 'ffmpeg -y' from base
             
             # Execute the FFmpeg command for intro processing
-            if not run_ffmpeg_with_error_handling(cmd, f"intro file {filename}", str(safe_name), filename, file_type):
+            if not run_ffmpeg_with_error_handling(cmd, f"intro file {filename}", str(safe_name), full_filename, file_type):
                 print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                 sys.exit(1)
             
@@ -1278,27 +1585,27 @@ if processing_order:  # Only process if there are files to process
                 cmd = [
                     'ffmpeg', '-y',
                     '-loop', '1', '-i', str(background_path),  # Background image
-                    '-i', filename,  # Audio file
+                    '-i', full_filename,  # Audio file
                     '-vf', f'scale=1920:1080,drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
                     '-af', get_audio_filter(),
                     '-shortest'  # End when audio ends
                 ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
                 
                 # Try the command, fall back if it fails
-                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with {bg_description}", str(safe_name), filename, file_type):
+                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with {bg_description}", str(safe_name), full_filename, file_type):
                     print(f"{Fore.YELLOW}  WARNING: Failed to use {bg_description}, falling back to black background{Style.RESET_ALL}")
                     
                     # Fallback to black background
                     cmd = [
                         'ffmpeg', '-y',
                         '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
-                        '-i', filename,  # Audio file
+                        '-i', full_filename,  # Audio file
                         '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
                         '-af', get_audio_filter(),
                         '-shortest'  # End when audio ends
                     ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
                     
-                    if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), filename, file_type):
+                    if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), full_filename, file_type):
                         print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                         sys.exit(1)
                 else:
@@ -1309,13 +1616,13 @@ if processing_order:  # Only process if there are files to process
                 cmd = [
                     'ffmpeg', '-y',
                     '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
-                    '-i', filename,  # Audio file
+                    '-i', full_filename,  # Audio file
                     '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
                     '-af', get_audio_filter(),
                     '-shortest'  # End when audio ends
                 ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
                 
-                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), filename, file_type):
+                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), full_filename, file_type):
                     print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                     sys.exit(1)
             
@@ -1325,22 +1632,45 @@ if processing_order:  # Only process if there are files to process
             
             # Apply comprehensive standardization using centralized functions
             cmd = [
-                'ffmpeg', '-y', '-i', filename,
+                'ffmpeg', '-y', '-i', full_filename,
                 '-vf', get_video_filter(),
                 '-af', get_audio_filter()
             ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
         
             # Process file and exit on failure to prevent corrupted output
-            if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name), filename, file_type):
+            if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name), full_filename, file_type):
                 print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                 sys.exit(1)
 
+# R operation stops here - only re-renders temp files, no final merge
+if action == 'R':
+    if processing_order:
+        print(f"{Fore.GREEN}✓ Re-rendering complete: {len(processing_order)} temp files updated{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.GREEN}✓ Re-rendering complete: Selected temp files were already up to date{Style.RESET_ALL}")
+    
+    print(f"{Fore.YELLOW}Temp files are ready. Use M operation to merge them into final output.{Style.RESET_ALL}")
+    print()
+    print(f"{Fore.GREEN}=== Process Complete ==={Style.RESET_ALL}")
+    sys.exit(0)
+
 # =============================================================================
-# FINAL CONCATENATION AND OUTPUT GENERATION
+# FINAL CONCATENATION AND OUTPUT GENERATION (for normal processing and M operation)
 # =============================================================================
 
 print()
 print(f"{Fore.GREEN}=== Creating File List ==={Style.RESET_ALL}")
+
+# Generate range indicator for filename if applicable (M operation only)
+range_indicator = None
+if selected_indices and action == 'M':
+    range_indicator = format_range_indicator(selected_indices, action)
+
+# Generate final output filename with range indicator
+final_output_filename = generate_output_filename(range_indicator)
+final_output_path = output_dir / final_output_filename
+
+print(f"{Fore.YELLOW}Final output: {final_output_path}{Style.RESET_ALL}")
 
 # For merge mode, use the selected indices
 if action == 'M':
@@ -1375,10 +1705,10 @@ print(f"{Fore.WHITE}  -> Using stream copy for fast concatenation (no re-encodin
 cmd = [
     'ffmpeg', '-f', 'concat', '-safe', '0', '-i', str(filelist_path),
     '-c', 'copy',  # Stream copy - no re-encoding needed since all files are standardized
-    final_output_file
+    str(final_output_path)
 ]
 
-if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_file, str(filelist_path), "CONCAT"):
+if not run_ffmpeg_with_error_handling(cmd, "final concatenation", str(final_output_path), str(filelist_path), "CONCAT"):
     print(f"{Fore.RED}Final concatenation failed - falling back to re-encoding...{Style.RESET_ALL}")
     
     # Fallback: Use re-encoding if stream copy fails due to edge cases
@@ -1386,10 +1716,10 @@ if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_f
         'ffmpeg', '-f', 'concat', '-safe', '0', '-i', str(filelist_path),
         '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
         '-c:a', 'aac', '-b:a', '128k',
-        final_output_file
+        str(final_output_path)
     ]
     
-    if not run_ffmpeg_with_error_handling(cmd_fallback, "final concatenation (re-encoding)", final_output_file, str(filelist_path), "CONCAT"):
+    if not run_ffmpeg_with_error_handling(cmd_fallback, "final concatenation (re-encoding)", str(final_output_path), str(filelist_path), "CONCAT"):
         print(f"{Fore.RED}Both stream copy and re-encoding failed{Style.RESET_ALL}")
         sys.exit(1)
 
@@ -1398,8 +1728,8 @@ if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_f
 # =============================================================================
 
 # Verify successful output creation and provide cleanup options
-if Path(final_output_file).exists():
-    print(f"{Fore.GREEN}✓ SUCCESS: Created {final_output_file}{Style.RESET_ALL}")
+if final_output_path.exists():
+    print(f"{Fore.GREEN}✓ SUCCESS: Created {final_output_path}{Style.RESET_ALL}")
     
     # Offer optional cleanup with timed prompt
     print()
