@@ -5,16 +5,38 @@ filelist.txt
 LOGS/
 *.log
 OUTPUT/
-*.mp4
 INPUT/
-*.png
-*.jpg
-*.wav
+ARCHIVED/
+
+# Video file extensions (12 formats supported)
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.3gp
+*.ts
+*.mts
+*.vob
+
+# Audio file extensions (9 formats supported)
 *.mp3
 *.m4a
+*.wav
+*.flac
+*.aac
 *.ogg
-*.mov
-ARCHIVED/
+*.wma
+*.opus
+*.mp2
+
+# Image file extensions
+*.png
+*.jpg
+*.jpeg
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
