@@ -3,6 +3,15 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v30a - CORE PROCESSING FUNCTION EXTRACTION
+CHANGES:
+- EXTRACTED: process_intro_file() function for PNG to video conversion with silent audio
+- EXTRACTED: process_audio_file() function for audio processing with background search and text overlay
+- EXTRACTED: process_video_file() function for video standardization with filters
+- SIMPLIFIED: Main processing loop now calls extracted functions for better modularity
+- IMPROVED: Enhanced error handling and type hints for processing functions
+- MAINTAINED: All existing functionality and behavior preserved
+
 VERSION: v29B - OPERATION BEHAVIOR AND ORGANIZATION
 CHANGES:
 - ADDED: C operation to clear cache (delete temp_ directory and all .cache files)
@@ -553,6 +562,143 @@ def format_range_indicator(indices: List[int], operation: str) -> str:
         return f"{operation}{indices[0]}"
     else:
         return f"{operation}{min(indices)}_{max(indices)}"
+
+# =============================================================================
+# CORE PROCESSING FUNCTIONS (v30a)
+# =============================================================================
+
+def process_intro_file(filename: str, output_path: str, title_screen_path: Optional[Path] = None, duration: int = 3) -> bool:
+    """
+    Process PNG intro file by converting to video with silent audio track.
+    
+    Creates a standardized video from PNG image with specified duration,
+    using the same output format as all other processed files for seamless concatenation.
+    
+    Args:
+        filename: Path to the PNG file to process
+        output_path: Path where the processed video will be saved
+        title_screen_path: Optional title screen path (unused for intro processing)
+        duration: Duration in seconds for the intro video (default: 3)
+        
+    Returns:
+        True if processing succeeded, False if it failed
+        
+    Note:
+        Output video will have: 1920x1080, 30fps, H.264, yuv420p, AAC audio
+    """
+    try:
+        # Convert PNG to video using standardized settings
+        cmd = [
+            'ffmpeg', '-y',
+            '-loop', '1', '-i', filename,  # Loop the image
+            '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',  # Silent audio
+            '-vf', get_video_filter(),  # Standard video scaling/padding
+            '-shortest'  # End when shortest stream (duration) ends
+        ] + build_base_ffmpeg_cmd(output_path, duration=duration)[2:]  # Skip 'ffmpeg -y' from base
+        
+        # Execute FFmpeg command
+        return run_ffmpeg_with_error_handling(cmd, f"intro file {Path(filename).name}", output_path, filename, 'INTRO')
+        
+    except Exception as e:
+        print(f"{Fore.RED}  ✗ FAILED: Unexpected error processing intro file {Path(filename).name}: {e}{Style.RESET_ALL}")
+        return False
+
+def process_audio_file(filename: str, output_path: str, title_screen_path: Optional[Path] = None) -> bool:
+    """
+    Process audio file by creating video with waveform visualization and text overlay.
+    
+    Searches for appropriate background image following hierarchy:
+    1. Same filename with .png extension (case-insensitive)
+    2. audio_background.png 
+    3. Title screen image (if provided)
+    4. Black background
+    
+    Args:
+        filename: Path to the audio file to process
+        output_path: Path where the processed video will be saved  
+        title_screen_path: Optional path to title screen for background fallback
+        
+    Returns:
+        True if processing succeeded, False if it failed
+        
+    Note:
+        Output video will have: 1920x1080, 30fps, H.264, yuv420p, AAC audio
+        Text overlay shows "Audio only submission: {filename}" at bottom
+    """
+    try:
+        # Find appropriate background image
+        background_path, bg_description = find_audio_background(Path(filename).name, title_screen_path)
+        
+        # Prepare text overlay with proper colon escaping
+        text_overlay = f"Audio only submission: {Path(filename).name}"
+        text_overlay_escaped = text_overlay.replace(":", "\\\\:")
+        
+        # Try background image first if available
+        if background_path:
+            cmd = [
+                'ffmpeg', '-y',
+                '-loop', '1', '-i', str(background_path),  # Background image
+                '-i', filename,  # Audio file
+                '-vf', f'scale=1920:1080,drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
+                '-af', get_audio_filter(),
+                '-shortest'  # End when audio ends
+            ] + build_base_ffmpeg_cmd(output_path)[2:]  # Skip 'ffmpeg -y' from base
+            
+            # Try with background image, fall back if it fails
+            if run_ffmpeg_with_error_handling(cmd, f"audio file {Path(filename).name} with {bg_description}", output_path, filename, 'AUDIO'):
+                return True
+            
+            # Fallback warning
+            print(f"{Fore.YELLOW}  WARNING: Failed to use {bg_description}, falling back to black background{Style.RESET_ALL}")
+        
+        # Use black background (fallback or no background found)
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
+            '-i', filename,  # Audio file
+            '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
+            '-af', get_audio_filter(),
+            '-shortest'  # End when audio ends
+        ] + build_base_ffmpeg_cmd(output_path)[2:]  # Skip 'ffmpeg -y' from base
+        
+        return run_ffmpeg_with_error_handling(cmd, f"audio file {Path(filename).name} with black background", output_path, filename, 'AUDIO')
+        
+    except Exception as e:
+        print(f"{Fore.RED}  ✗ FAILED: Unexpected error processing audio file {Path(filename).name}: {e}{Style.RESET_ALL}")
+        return False
+
+def process_video_file(filename: str, output_path: str) -> bool:
+    """
+    Process video file by applying standardization filters for consistent output.
+    
+    Applies comprehensive video and audio standardization:
+    - Video: 1920x1080, 30fps, aspect ratio preservation, letterbox/pillarbox as needed
+    - Audio: 48kHz stereo, EBU R128 loudness normalization (-16 LUFS)
+    - Duration: Cropped to 15 seconds maximum
+    
+    Args:
+        filename: Path to the video file to process
+        output_path: Path where the processed video will be saved
+        
+    Returns:
+        True if processing succeeded, False if it failed
+        
+    Note:
+        Output video will have: 1920x1080, 30fps, H.264 High profile, yuv420p, AAC audio
+    """
+    try:
+        # Apply comprehensive standardization using centralized functions
+        cmd = [
+            'ffmpeg', '-y', '-i', filename,
+            '-vf', get_video_filter(),
+            '-af', get_audio_filter()
+        ] + build_base_ffmpeg_cmd(output_path)[2:]  # Skip 'ffmpeg -y' from base
+        
+        return run_ffmpeg_with_error_handling(cmd, f"video file {Path(filename).name}", output_path, filename, 'VIDEO')
+        
+    except Exception as e:
+        print(f"{Fore.RED}  ✗ FAILED: Unexpected error processing video file {Path(filename).name}: {e}{Style.RESET_ALL}")
+        return False
 
 # =============================================================================
 # CACHE SYSTEM FUNCTIONS (v29)
@@ -1552,95 +1698,23 @@ if processing_order:  # Only process if there are files to process
         # Use full path from search directory
         full_filename = str(search_dir / filename)
         
-        if file_type == 'INTRO':
-            print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing title screen image: {filename}{Style.RESET_ALL}")
-            print(f"{Fore.WHITE}  -> Creating 3-second intro with silent audio track...{Style.RESET_ALL}")
-            
-            # Convert PNG to 3-second video using the same standardized settings as all other media
-            cmd = [
-                'ffmpeg', '-y',
-                '-loop', '1', '-i', full_filename,  # Loop the image
-                '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',  # Silent audio
-                '-vf', get_video_filter(),  # Standard video scaling/padding
-                '-shortest'  # End when shortest stream (3 seconds) ends
-            ] + build_base_ffmpeg_cmd(safe_name, duration=3)[2:]  # Skip 'ffmpeg -y' from base
-            
-            # Execute the FFmpeg command for intro processing
-            if not run_ffmpeg_with_error_handling(cmd, f"intro file {filename}", str(safe_name), full_filename, file_type):
-                print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
-                sys.exit(1)
-            
-        elif file_type == 'AUDIO':
-            print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
-            
-            # Find appropriate background using new search logic
-            background_path, bg_description = find_audio_background(filename, title_screen_path)
-            
-            # Prepare text overlay with proper colon escaping
-            text_overlay = f"Audio only submission: {filename}"
-            text_overlay_escaped = text_overlay.replace(":", "\\\\:")
-            
-            if background_path:
-                # Try to use the found background image
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-loop', '1', '-i', str(background_path),  # Background image
-                    '-i', full_filename,  # Audio file
-                    '-vf', f'scale=1920:1080,drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
-                    '-af', get_audio_filter(),
-                    '-shortest'  # End when audio ends
-                ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
-                
-                # Try the command, fall back if it fails
-                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with {bg_description}", str(safe_name), full_filename, file_type):
-                    print(f"{Fore.YELLOW}  WARNING: Failed to use {bg_description}, falling back to black background{Style.RESET_ALL}")
-                    
-                    # Fallback to black background
-                    cmd = [
-                        'ffmpeg', '-y',
-                        '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
-                        '-i', full_filename,  # Audio file
-                        '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
-                        '-af', get_audio_filter(),
-                        '-shortest'  # End when audio ends
-                    ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
-                    
-                    if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), full_filename, file_type):
-                        print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
-                        sys.exit(1)
-                else:
-                    # Success with background image, continue to next file
-                    continue
-            else:
-                # No background image found, use black background directly
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-f', 'lavfi', '-i', 'color=black:size=1920x1080:rate=30',  # Black background
-                    '-i', full_filename,  # Audio file
-                    '-vf', f'drawtext=fontsize=36:fontcolor=white:x=10:y=h-th-10:text={text_overlay_escaped}',
-                    '-af', get_audio_filter(),
-                    '-shortest'  # End when audio ends
-                ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
-                
-                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), full_filename, file_type):
-                    print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
-                    sys.exit(1)
-            
-        else:  # VIDEO
-            print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
-            print(f"{Fore.WHITE}  -> Processing video file...{Style.RESET_ALL}")
-            
-            # Apply comprehensive standardization using centralized functions
-            cmd = [
-                'ffmpeg', '-y', '-i', full_filename,
-                '-vf', get_video_filter(),
-                '-af', get_audio_filter()
-            ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
+        print(f"{Fore.CYAN}[{i + 1}/{total_files}] Processing: {filename}{Style.RESET_ALL}")
         
-            # Process file and exit on failure to prevent corrupted output
-            if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name), full_filename, file_type):
-                print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
-                sys.exit(1)
+        # Call appropriate processing function based on file type
+        success = False
+        if file_type == 'INTRO':
+            print(f"{Fore.WHITE}  -> Creating 3-second intro with silent audio track...{Style.RESET_ALL}")
+            success = process_intro_file(full_filename, str(safe_name), title_screen_path)
+        elif file_type == 'AUDIO':
+            success = process_audio_file(full_filename, str(safe_name), title_screen_path)
+        else:  # VIDEO
+            print(f"{Fore.WHITE}  -> Processing video file...{Style.RESET_ALL}")
+            success = process_video_file(full_filename, str(safe_name))
+        
+        # Exit on failure to prevent corrupted output
+        if not success:
+            print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
+            sys.exit(1)
 
 # R operation stops here - only re-renders temp files, no final merge
 if action == 'R':
