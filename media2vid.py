@@ -3,6 +3,25 @@
 Universal video montage creation script that automatically processes mixed media files 
 into a single concatenated video with standardized formatting.
 
+VERSION: v29b - CODEC NORMALIZATION FIX
+CHANGES:
+- ADDED: normalize_codec_name() function to handle FFmpeg command vs metadata codec name mismatches
+- FIXED: Video and audio codec validation now uses normalized names (libx264->h264, h264_nvenc->h264, etc.)
+- IMPROVED: Cache validation more reliable with proper codec name mapping
+
+VERSION: v29 - CACHE SYSTEM AND TIMED CLEANUP
+CHANGES:
+- ADDED: use_cache flag (defaults True) for intelligent temp file caching
+- ADDED: get_cache_info() function to generate parameter signatures for cache validation
+- ADDED: is_cached_file_valid() function for cache comparison and modification time checking
+- MODIFIED: run_ffmpeg_with_error_handling() now checks cache before processing
+- MODIFIED: Main processing loop integrates cache validation to skip regeneration when appropriate
+- ADDED: 5-second timed cleanup prompt with default to preserve temp files
+- IMPROVED: Cache system compares key FFmpeg parameters and source file modification times
+- FIXED: Human-readable JSON cache files with ffprobe validation of actual file properties
+- FIXED: Dynamic resolution extraction and float duration parsing
+- IMPROVED: Comprehensive validation of resolution, codecs, pixel format, sample rate, and duration
+
 VERSION: v28 - PURE FUNCTION EXTRACTION
 CHANGES:
 - EXTRACTED: Helper functions for better modularity without changing program flow
@@ -73,12 +92,18 @@ DESCRIPTION:
     - Creates waveform visualizations for audio-only files (cyan, no text overlay)
     - Ensures consistent audio bitrate (~128kbps AAC) across all segments
     
+    CACHING SYSTEM:
+    - Intelligent temp file caching compares FFmpeg parameters and source modification times
+    - Skips regeneration when cached files are valid and newer than source
+    - Controlled by use_cache flag (defaults to True)
+    
     USER INTERACTION:
     - Displays comprehensive file categorization and processing order
     - Shows ignored files with reasons for exclusion
     - Provides 20-second countdown with interactive pause/continue/cancel options
     - Range processing (R) and selective merging (M) options
     - Includes progress tracking for each file processed
+    - Timed cleanup prompt (5 seconds) with default to preserve temp files
     
     OUTPUT & CLEANUP:
     - Creates timestamped output files (DirectoryName-MERGED-yyyymmdd_hhmmss.mp4)
@@ -118,6 +143,7 @@ import threading
 import time
 import shutil
 import json
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Set
@@ -132,6 +158,13 @@ except ImportError:
         GREEN = RED = YELLOW = CYAN = MAGENTA = WHITE = ""
     class Style:
         RESET_ALL = ""
+
+# =============================================================================
+# CONFIGURATION FLAGS
+# =============================================================================
+
+# Cache system control - when True, validates existing temp files before regenerating
+use_cache = True
 
 # =============================================================================
 # HELPER FUNCTIONS - EXTRACTED FOR MODULARITY (v28)
@@ -288,6 +321,289 @@ def categorize_media_files(all_files: List[Path]) -> Dict[str, List[str]]:
     }
 
 # =============================================================================
+# CACHE SYSTEM FUNCTIONS (v29)
+# =============================================================================
+
+def normalize_codec_name(codec_name: str) -> str:
+    """
+    Normalize codec names for comparison between FFmpeg command and metadata.
+    
+    Handles common mismatches where command codec names differ from metadata names:
+    - libx264 (command) -> h264 (metadata)
+    - h264_nvenc (command) -> h264 (metadata)
+    - libfdk_aac (command) -> aac (metadata)
+    
+    Args:
+        codec_name: Codec name from command or metadata
+        
+    Returns:
+        Normalized codec name for consistent comparison
+    """
+    codec_map = {
+        # Video codecs
+        'libx264': 'h264',
+        'h264_nvenc': 'h264', 
+        'h264_qsv': 'h264',
+        'libx265': 'hevc',
+        'hevc_nvenc': 'hevc',
+        'hevc_qsv': 'hevc',
+        
+        # Audio codecs  
+        'libfdk_aac': 'aac',
+        'aac': 'aac',
+        'libmp3lame': 'mp3',
+        'mp3': 'mp3',
+        'libopus': 'opus',
+        'opus': 'opus'
+    }
+    return codec_map.get(codec_name.lower(), codec_name.lower())
+
+def get_cache_info(cmd: List[str], file_type: str, filename: str) -> Dict:
+    """
+    Generate cache information from FFmpeg command parameters for validation.
+    
+    Extracts key parameters that affect output quality and format:
+    - Video: codec, resolution, fps, pixel format, CRF/bitrate
+    - Audio: codec, sample rate, channels, bitrate  
+    - Duration and filters
+    
+    Args:
+        cmd: FFmpeg command list
+        file_type: Type of file being processed ('INTRO', 'VIDEO', 'AUDIO')
+        filename: Source filename for additional context
+        
+    Returns:
+        Dictionary with command, expected parameters, and metadata
+    """
+    # Extract key parameters that affect output
+    expected_params = {}
+    
+    # Parse command for key parameters
+    i = 0
+    while i < len(cmd):
+        arg = cmd[i]
+        
+        # Video parameters
+        if arg in ['-c:v', '-vcodec']:
+            expected_params['video_codec'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-crf':
+            expected_params['crf'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-b:v':
+            expected_params['video_bitrate'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-pix_fmt':
+            expected_params['pixel_format'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-profile:v':
+            expected_params['video_profile'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-preset':
+            expected_params['preset'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-vf':
+            expected_params['video_filter'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+            
+        # Audio parameters
+        elif arg in ['-c:a', '-acodec']:
+            expected_params['audio_codec'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-ar':
+            expected_params['sample_rate'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-b:a':
+            expected_params['audio_bitrate'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+        elif arg == '-af':
+            expected_params['audio_filter'] = cmd[i + 1] if i + 1 < len(cmd) else ''
+            
+        # Duration
+        elif arg == '-t':
+            duration_str = cmd[i + 1] if i + 1 < len(cmd) else '15'
+            try:
+                command_duration = float(duration_str)
+            except ValueError:
+                command_duration = 15.0
+                
+            # Get actual source file duration
+            try:
+                duration_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', filename]
+                result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
+                format_info = json.loads(result.stdout)
+                source_duration = float(format_info['format']['duration'])
+                
+                # Use minimum of source duration and command duration (for cropping)
+                expected_params['duration'] = min(source_duration, command_duration)
+            except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError):
+                # If we can't get source duration, fall back to command duration
+                expected_params['duration'] = command_duration
+            
+        i += 1
+    
+    # Extract resolution from video filter dynamically
+    if 'video_filter' in expected_params:
+        filter_str = expected_params['video_filter']
+        # Look for scale=WIDTHxHEIGHT pattern
+        import re
+        scale_match = re.search(r'scale=(\d+):(\d+)', filter_str)
+        if scale_match:
+            width, height = scale_match.groups()
+            expected_params['resolution'] = f"{width}x{height}"
+    
+    return {
+        'command': ' '.join(cmd),
+        'expected': expected_params,
+        'created': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'source_file': filename,
+        'file_type': file_type
+    }
+
+def is_cached_file_valid(temp_file_path: Path, source_file_path: str, cache_info: Dict) -> bool:
+    """
+    Check if cached temp file is valid using ffprobe validation.
+    
+    Validates:
+    - Temp file exists and is not empty
+    - Temp file is newer than source file (modification time)
+    - ffprobe confirms actual file properties match expected parameters
+    
+    Args:
+        temp_file_path: Path to temp file to validate
+        source_file_path: Path to source file
+        cache_info: Expected cache information dict
+        
+    Returns:
+        True if cached file is valid and can be reused, False otherwise
+    """
+    if not use_cache:
+        return False
+        
+    # Check if temp file exists and has content
+    if not temp_file_path.exists() or temp_file_path.stat().st_size == 0:
+        return False
+    
+    # Check modification times - temp file should be newer than source
+    try:
+        temp_mtime = temp_file_path.stat().st_mtime
+        source_mtime = Path(source_file_path).stat().st_mtime
+        
+        if temp_mtime <= source_mtime:
+            print(f"{Fore.YELLOW}  -> Cache invalid: source file is newer{Style.RESET_ALL}")
+            return False
+    except (OSError, FileNotFoundError):
+        return False
+    
+    # Check cache info file for parameter matching
+    cache_info_file = temp_file_path.with_suffix('.cache')
+    if not cache_info_file.exists():
+        print(f"{Fore.YELLOW}  -> Cache invalid: no parameter signature found{Style.RESET_ALL}")
+        return False
+    
+    try:
+        with cache_info_file.open('r') as f:
+            stored_cache_info = json.loads(f.read())
+            
+        # Compare expected parameters
+        stored_expected = stored_cache_info.get('expected', {})
+        current_expected = cache_info.get('expected', {})
+        
+        # Check key parameters match
+        key_params_to_check = ['video_codec', 'audio_codec', 'resolution', 'duration', 'pixel_format', 'sample_rate']
+        for param in key_params_to_check:
+            if stored_expected.get(param) != current_expected.get(param):
+                print(f"{Fore.YELLOW}  -> Cache invalid: {param} parameter changed{Style.RESET_ALL}")
+                return False
+        
+        # Use ffprobe to validate actual file properties
+        actual_info = get_stream_info(str(temp_file_path))
+        
+        # Validate video properties if expected
+        if 'resolution' in current_expected:
+            expected_res = current_expected['resolution']
+            if actual_info['video']:
+                actual_res = actual_info['video']['resolution']
+                if actual_res != expected_res:
+                    print(f"{Fore.YELLOW}  -> Cache invalid: resolution mismatch (expected {expected_res}, got {actual_res}){Style.RESET_ALL}")
+                    return False
+            else:
+                print(f"{Fore.YELLOW}  -> Cache invalid: expected video stream not found{Style.RESET_ALL}")
+                return False
+        
+        # Validate video codec if expected
+        if 'video_codec' in current_expected and actual_info['video']:
+            expected_codec = current_expected['video_codec']
+            actual_codec = actual_info['video']['codec']
+            # Normalize both codec names for comparison
+            expected_codec_norm = normalize_codec_name(expected_codec)
+            actual_codec_norm = normalize_codec_name(actual_codec)
+            if expected_codec_norm != actual_codec_norm:
+                print(f"{Fore.YELLOW}  -> Cache invalid: video codec mismatch (expected {expected_codec}->{expected_codec_norm}, got {actual_codec}->{actual_codec_norm}){Style.RESET_ALL}")
+                return False
+        
+        # Validate pixel format if expected
+        if 'pixel_format' in current_expected and actual_info['video']:
+            expected_pix_fmt = current_expected['pixel_format']
+            actual_pix_fmt = actual_info['video']['pix_fmt']
+            if expected_pix_fmt != actual_pix_fmt:
+                print(f"{Fore.YELLOW}  -> Cache invalid: pixel format mismatch (expected {expected_pix_fmt}, got {actual_pix_fmt}){Style.RESET_ALL}")
+                return False
+        
+        # Validate audio codec if expected
+        if 'audio_codec' in current_expected and actual_info['audio']:
+            expected_codec = current_expected['audio_codec']
+            actual_codec = actual_info['audio']['codec']
+            # Normalize both codec names for comparison
+            expected_codec_norm = normalize_codec_name(expected_codec)
+            actual_codec_norm = normalize_codec_name(actual_codec)
+            if expected_codec_norm != actual_codec_norm:
+                print(f"{Fore.YELLOW}  -> Cache invalid: audio codec mismatch (expected {expected_codec}->{expected_codec_norm}, got {actual_codec}->{actual_codec_norm}){Style.RESET_ALL}")
+                return False
+        
+        # Validate sample rate if expected
+        if 'sample_rate' in current_expected and actual_info['audio']:
+            expected_sr = str(current_expected['sample_rate'])
+            actual_sr = str(actual_info['audio']['sample_rate'])
+            if expected_sr != actual_sr:
+                print(f"{Fore.YELLOW}  -> Cache invalid: sample rate mismatch (expected {expected_sr}Hz, got {actual_sr}Hz){Style.RESET_ALL}")
+                return False
+        
+        # Validate duration if expected (with tolerance for encoding variations)
+        if 'duration' in current_expected:
+            expected_duration = float(current_expected['duration'])
+            # Get actual duration using ffprobe
+            try:
+                duration_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', str(temp_file_path)]
+                result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
+                format_info = json.loads(result.stdout)
+                actual_duration = float(format_info['format']['duration'])
+                
+                # Allow 0.5 second tolerance for encoding variations
+                duration_diff = abs(actual_duration - expected_duration)
+                if duration_diff > 0.5:
+                    print(f"{Fore.YELLOW}  -> Cache invalid: duration mismatch (expected {expected_duration}s, got {actual_duration}s){Style.RESET_ALL}")
+                    return False
+            except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError):
+                # If we can't get duration, don't fail validation
+                pass
+        
+        print(f"{Fore.GREEN}  -> Using cached file: {temp_file_path.name} (validated with ffprobe){Style.RESET_ALL}")
+        return True
+        
+    except (OSError, IOError, json.JSONDecodeError, KeyError):
+        print(f"{Fore.YELLOW}  -> Cache invalid: could not read or parse cache file{Style.RESET_ALL}")
+        return False
+
+def save_cache_info(temp_file_path: Path, cache_info: Dict) -> None:
+    """
+    Save cache information to JSON file for future validation.
+    
+    Args:
+        temp_file_path: Path to temp file 
+        cache_info: Cache information dict to save
+    """
+    if not use_cache:
+        return
+        
+    cache_info_file = temp_file_path.with_suffix('.cache')
+    try:
+        with cache_info_file.open('w') as f:
+            json.dump(cache_info, f, indent=2)
+    except (OSError, IOError):
+        pass  # Cache info saving is not critical
+
+# =============================================================================
 # FFMPEG COMMAND BUILDER - CENTRALIZED STANDARDIZATION
 # =============================================================================
 
@@ -405,14 +721,42 @@ def print_stream_info(file_path: str, prefix: str = "  ") -> None:
         layout = f"({a['channel_layout']})" if a['channel_layout'] not in ['unknown', 'stereo', '2'] else ''
         print(f"{prefix}🔊 Audio: {a['codec']} {a['sample_rate']}Hz {channels} {layout}")
 
-def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path: str) -> bool:
+def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path: str, source_file: str, file_type: str) -> bool:
     """
-    Execute FFmpeg command with comprehensive error handling and cleanup.
+    Execute FFmpeg command with comprehensive error handling, cleanup, and cache validation.
     Returns True on success, False on failure.
+    
+    Args:
+        cmd: FFmpeg command list
+        description: Description for logging
+        output_path: Path where output will be created
+        source_file: Source file path for cache validation
+        file_type: Type of file being processed ('INTRO', 'VIDEO', 'AUDIO')
     """
+    temp_file_path = Path(output_path)
+    
+    # Check cache validity first
+    if use_cache:
+        cache_info = get_cache_info(cmd, file_type, source_file)
+        
+        if is_cached_file_valid(temp_file_path, source_file, cache_info):
+            # Show stream info for the cached file
+            print_stream_info(output_path)
+            return True
+        
+        # If we reach here, cache is invalid or doesn't exist, so we'll process
+        # Clean up any existing cache files
+        cache_info_file = temp_file_path.with_suffix('.cache')
+        if cache_info_file.exists():
+            cache_info_file.unlink()
+    
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"{Fore.GREEN}  ✓ Created: {output_path}{Style.RESET_ALL}")
+        
+        # Save cache info for future validation
+        if use_cache:
+            save_cache_info(temp_file_path, cache_info)
         
         # Show stream info for the created file
         print_stream_info(output_path)
@@ -467,9 +811,13 @@ def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path
         
         print()
         
-        # Clean up failed output file
+        # Clean up failed output file and cache
         if Path(output_path).exists():
             Path(output_path).unlink()
+        if use_cache:
+            cache_info_file = temp_file_path.with_suffix('.cache')
+            if cache_info_file.exists():
+                cache_info_file.unlink()
             
         return False
 
@@ -559,11 +907,49 @@ def find_audio_background(filename: str, title_screen_path: Optional[Path] = Non
     print(f"{Fore.WHITE}  -> No background image found, using black background{Style.RESET_ALL}")
     return (None, "black background")
 
+def get_user_input_with_timeout_cleanup():
+    """Handle cleanup prompt with 5-second timeout defaulting to preserve files."""
+    print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
+    
+    # Use threading for non-blocking input with timeout
+    input_result = [None]
+    
+    def get_input():
+        try:
+            input_result[0] = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            input_result[0] = "n"
+    
+    # Start input thread
+    input_thread = threading.Thread(target=get_input, daemon=True)
+    input_thread.start()
+    
+    # Wait up to 5 seconds for input
+    start_time = time.time()
+    while time.time() - start_time < 5.0:
+        if input_result[0] is not None:
+            break
+        time.sleep(0.1)
+    
+    # Get result or default to 'n'
+    response = input_result[0] if input_result[0] is not None else "n"
+    
+    if input_result[0] is None:
+        print("n (timed out)")
+    
+    return response in ['y', 'yes']
+
 # =============================================================================
 # INITIALIZATION AND OUTPUT FILENAME GENERATION
 # =============================================================================
 
 print(f"{Fore.GREEN}=== Starting Video Processing ==={Style.RESET_ALL}")
+
+# Show cache status
+if use_cache:
+    print(f"{Fore.CYAN}Cache system: ENABLED - will reuse valid temp files{Style.RESET_ALL}")
+else:
+    print(f"{Fore.YELLOW}Cache system: DISABLED - will regenerate all temp files{Style.RESET_ALL}")
 
 # Generate timestamped output filename to avoid conflicts with previous runs
 final_output_file = generate_output_filename()
@@ -800,11 +1186,10 @@ print(f"{Fore.GREEN}Starting processing...{Style.RESET_ALL}")
 # Create dedicated temp directory for organized file management
 temp_dir = Path("temp_")
 if temp_dir.exists():
-    shutil.rmtree(temp_dir)
-    print(f"{Fore.WHITE}Cleared existing temp directory{Style.RESET_ALL}")
-
-temp_dir.mkdir()
-print(f"{Fore.WHITE}Created temp directory: {temp_dir}{Style.RESET_ALL}")
+    print(f"{Fore.WHITE}Using existing temp directory: {temp_dir}{Style.RESET_ALL}")
+else:
+    temp_dir.mkdir()
+    print(f"{Fore.WHITE}Created temp directory: {temp_dir}{Style.RESET_ALL}")
 
 # =============================================================================
 # HANDLE MERGE MODE
@@ -874,7 +1259,7 @@ if processing_order:  # Only process if there are files to process
             ] + build_base_ffmpeg_cmd(safe_name, duration=3)[2:]  # Skip 'ffmpeg -y' from base
             
             # Execute the FFmpeg command for intro processing
-            if not run_ffmpeg_with_error_handling(cmd, f"intro file {filename}", str(safe_name)):
+            if not run_ffmpeg_with_error_handling(cmd, f"intro file {filename}", str(safe_name), filename, file_type):
                 print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                 sys.exit(1)
             
@@ -900,7 +1285,7 @@ if processing_order:  # Only process if there are files to process
                 ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
                 
                 # Try the command, fall back if it fails
-                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with {bg_description}", str(safe_name)):
+                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with {bg_description}", str(safe_name), filename, file_type):
                     print(f"{Fore.YELLOW}  WARNING: Failed to use {bg_description}, falling back to black background{Style.RESET_ALL}")
                     
                     # Fallback to black background
@@ -913,7 +1298,7 @@ if processing_order:  # Only process if there are files to process
                         '-shortest'  # End when audio ends
                     ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
                     
-                    if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name)):
+                    if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), filename, file_type):
                         print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                         sys.exit(1)
                 else:
@@ -930,7 +1315,7 @@ if processing_order:  # Only process if there are files to process
                     '-shortest'  # End when audio ends
                 ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
                 
-                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name)):
+                if not run_ffmpeg_with_error_handling(cmd, f"audio file {filename} with black background", str(safe_name), filename, file_type):
                     print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                     sys.exit(1)
             
@@ -946,7 +1331,7 @@ if processing_order:  # Only process if there are files to process
             ] + build_base_ffmpeg_cmd(safe_name)[2:]  # Skip 'ffmpeg -y' from base
         
             # Process file and exit on failure to prevent corrupted output
-            if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name)):
+            if not run_ffmpeg_with_error_handling(cmd, f"file {filename}", str(safe_name), filename, file_type):
                 print(f"{Fore.RED}Stopping script - check the error above{Style.RESET_ALL}")
                 sys.exit(1)
 
@@ -993,7 +1378,7 @@ cmd = [
     final_output_file
 ]
 
-if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_file):
+if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_file, str(filelist_path), "CONCAT"):
     print(f"{Fore.RED}Final concatenation failed - falling back to re-encoding...{Style.RESET_ALL}")
     
     # Fallback: Use re-encoding if stream copy fails due to edge cases
@@ -1004,7 +1389,7 @@ if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_f
         final_output_file
     ]
     
-    if not run_ffmpeg_with_error_handling(cmd_fallback, "final concatenation (re-encoding)", final_output_file):
+    if not run_ffmpeg_with_error_handling(cmd_fallback, "final concatenation (re-encoding)", final_output_file, str(filelist_path), "CONCAT"):
         print(f"{Fore.RED}Both stream copy and re-encoding failed{Style.RESET_ALL}")
         sys.exit(1)
 
@@ -1016,15 +1401,15 @@ if not run_ffmpeg_with_error_handling(cmd, "final concatenation", final_output_f
 if Path(final_output_file).exists():
     print(f"{Fore.GREEN}✓ SUCCESS: Created {final_output_file}{Style.RESET_ALL}")
     
-    # Offer optional cleanup of temporary processing files and directory
+    # Offer optional cleanup with timed prompt
     print()
-    cleanup_input = input(f"{Fore.YELLOW}Delete temp directory and files? (y/N): {Style.RESET_ALL}").strip().lower()
+    should_cleanup = get_user_input_with_timeout_cleanup()
     
-    if cleanup_input in ['y', 'yes']:
+    if should_cleanup:
         shutil.rmtree(temp_dir)
         print(f"{Fore.GREEN}Cleanup complete - temp directory and files removed!{Style.RESET_ALL}")
     else:
-        print(f"{Fore.YELLOW}Temp directory '{temp_dir}' and files preserved for inspection.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Temp directory '{temp_dir}' and files preserved.{Style.RESET_ALL}")
 else:
     # Preserve temp files for debugging if final output failed
     print(f"{Fore.RED}✗ FAILED: Final video not created{Style.RESET_ALL}")
