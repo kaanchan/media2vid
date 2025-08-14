@@ -828,7 +828,17 @@ def main() -> int:
         else:
             logger.info(f"{get_icon('🎯', 'Processing')} Using existing temp files for merge...")
         
-        # Create final output
+        # R operation stops here - only re-renders temp files, no final output
+        if action == 'R':
+            if files_to_process:
+                logger.info(f"{get_icon('✅', 'SUCCESS:')} Re-rendering complete: {len(files_to_process)} temp files updated")
+            else:
+                logger.info(f"{get_icon('✅', 'SUCCESS:')} Re-rendering complete: Selected temp files were already up to date")
+            
+            logger.info("Temp files are ready. Use M operation to merge them into final output.")
+            return 0
+        
+        # Create final output (for Y and M operations only)
         success = create_final_output(files_to_process, action, selected_indices, temp_files_for_merge)
         
         if success:
