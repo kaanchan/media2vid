@@ -335,6 +335,8 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     """
     Handle user confirmation with timeout, pause functionality, and range selection.
     
+    Features immediate key processing - single key presses are detected instantly.
+    
     Presents options menu and handles user input with 20-second timeout:
     - Y/Enter: Continue with all files
     - P: Pause countdown  
@@ -342,7 +344,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     - M: Merge specific range
     - C: Clear cache
     - O: Organize directory
-    - N/Q/ESC: Cancel and exit
+    - N/Q/ESC: Cancel and exit (immediate)
     
     Returns:
         Tuple of (action, selected_indices)
@@ -350,9 +352,10 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         - selected_indices: None for Y/C/O, List[int] for R/M
         
     Note:
+        Uses keyboard library for immediate key detection.
         C and O operations are handled immediately and exit the program.
-        ESC key support improved for better exit functionality.
     """
+    import keyboard
     
     print(f"{Fore.CYAN}=== CONFIRMATION ==={Style.RESET_ALL}")
     print("Ready to process media files.")
@@ -373,20 +376,47 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     start_time = time.time()
     action = None
     
-    # Use threading for fallback input (Enter-based)
-    input_result = [None]
-    input_thread = None
+    # Track last key detection to avoid spam
+    last_key_time = {}
     
-    def get_fallback_input():
-        try:
-            user_input = input().strip()
-            # Handle ESC character if present
-            if '\x1b' in user_input:
-                input_result[0] = "ESC"
-            else:
-                input_result[0] = user_input.upper()
-        except (EOFError, KeyboardInterrupt):
-            input_result[0] = "ESC"
+    def check_immediate_keys():
+        """Check for immediate key presses with debouncing."""
+        current_time = time.time()
+        keys_to_check = [
+            ('y', 'Y'), ('enter', 'ENTER'), ('p', 'P'), ('r', 'R'), 
+            ('m', 'M'), ('c', 'C'), ('o', 'O'), ('n', 'N'), 
+            ('q', 'Q'), ('esc', 'ESC')
+        ]
+        
+        for key_name, action_name in keys_to_check:
+            try:
+                if keyboard.is_pressed(key_name):
+                    # Debounce - only process if not detected recently
+                    if key_name not in last_key_time or current_time - last_key_time[key_name] > 0.5:
+                        last_key_time[key_name] = current_time
+                        # Clear keyboard buffer to prevent key from appearing in subsequent input prompts
+                        try:
+                            # Wait for key release to avoid multiple detections
+                            while keyboard.is_pressed(key_name):
+                                time.sleep(0.01)
+                            # Flush stdin buffer to prevent characters from appearing in input()
+                            import sys
+                            if sys.platform.startswith('win'):
+                                import msvcrt
+                                while msvcrt.kbhit():
+                                    msvcrt.getch()
+                            else:
+                                import termios
+                                termios.tcflush(sys.stdin, termios.TCIFLUSH)
+                            # Small additional delay to ensure clean buffer
+                            time.sleep(0.05)
+                        except:
+                            pass
+                        return action_name
+            except Exception:
+                # If keyboard detection fails, continue checking other keys
+                continue
+        return None
     
     # Main countdown loop with immediate and fallback input
     while not paused and action is None:
@@ -399,81 +429,70 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q/Esc]): {Style.RESET_ALL}", 
               end="", flush=True)
         
-        # Check for input with better ESC key support
-        if input_thread is None or not input_thread.is_alive():
-            input_thread = threading.Thread(target=get_fallback_input, daemon=True)
-            input_thread.start()
-        
-        # Check fallback input (Enter-based)
-        if input_result[0] is not None:
-            response = input_result[0]
-            if response in ['Y', '']:
+        # Check for immediate key presses
+        key_pressed = check_immediate_keys()
+        if key_pressed:
+            if key_pressed in ['Y', 'ENTER']:
                 print(f"\n{Fore.GREEN}Continuing immediately...{Style.RESET_ALL}")
                 action = 'Y'
                 break
-            elif response == 'P':
+            elif key_pressed == 'P':
                 paused = True
-                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press [Y/Enter] to continue, R for range, M for merge, C to clear cache, O to organize, or [N/Q/Esc] to cancel.{Style.RESET_ALL}")
+                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press any key to continue: Y/Enter, R, M, C, O, or N/Q/Esc to cancel.{Style.RESET_ALL}")
                 break
-            elif response == 'R':
+            elif key_pressed == 'R':
                 print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
                 action = 'R'
                 break
-            elif response == 'M':
+            elif key_pressed == 'M':
                 print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
                 action = 'M'
                 break
-            elif response == 'C':
+            elif key_pressed == 'C':
                 print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
                 action = 'C'
                 break
-            elif response == 'O':
+            elif key_pressed == 'O':
                 print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
                 action = 'O'
                 break
-            elif response in ['N', 'Q', 'ESC']:
+            elif key_pressed in ['N', 'Q', 'ESC']:
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 raise UserInterruptError("User cancelled")
+        
+        time.sleep(0.1)  # Small delay to prevent excessive CPU usage
     
-    # Handle paused state - wait indefinitely until user input
+    # Handle paused state - wait indefinitely until key press
     while paused and action is None:
-        print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q/Esc]: {Style.RESET_ALL}", end="", flush=True)
+        print(f"\r{Fore.YELLOW}PAUSED - Press any key: [Y/Enter]/R/M/C/O/[N/Q/Esc]: {Style.RESET_ALL}", end="", flush=True)
         
-        # Reset input for paused state
-        input_result[0] = None
-        paused_input_thread = None
+        key_pressed = check_immediate_keys()
+        if key_pressed:
+            if key_pressed in ['Y', 'ENTER']:
+                print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
+                action = 'Y'
+                break
+            elif key_pressed == 'R':
+                print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
+                action = 'R'
+                break
+            elif key_pressed == 'M':
+                print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
+                action = 'M'
+                break
+            elif key_pressed == 'C':
+                print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
+                action = 'C'
+                break
+            elif key_pressed == 'O':
+                print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
+                action = 'O'
+                break
+            elif key_pressed in ['N', 'Q', 'ESC']:
+                print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
+                raise UserInterruptError("User cancelled")
         
-        paused_input_thread = threading.Thread(target=get_fallback_input, daemon=True)
-        paused_input_thread.start()
-        
-        # Wait for input indefinitely when paused
-        while input_result[0] is None:
-            time.sleep(0.1)
-        
-        response = input_result[0]
-        if response in ['Y', '']:
-            print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
-            action = 'Y'
-        elif response == 'R':
-            print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
-            action = 'R'
-        elif response == 'M':
-            print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
-            action = 'M'
-        elif response == 'C':
-            print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
-            action = 'C'
-        elif response == 'O':
-            print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
-            action = 'O'
-        elif response in ['N', 'Q', 'ESC']:
-            print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
-            raise UserInterruptError("User cancelled")
-        else:
-            print(f"\n{Fore.RED}Invalid option: {response}. Please try again.{Style.RESET_ALL}")
-            # Reset and try again
-            input_result[0] = None
-        break  # Exit paused loop when action is set
+        time.sleep(0.1)  # Small delay to prevent excessive CPU usage
     
     # If timeout occurred, default to Y
     if action is None:
