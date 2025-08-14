@@ -12,20 +12,20 @@ except ImportError:
     class Style:
         RESET_ALL = ""
 
-def process_audio_file(filename: str, output_path: str, title_screen_path: Optional[Path] = None) -> bool:
+def process_audio_file(filename: str, output_path: str, custom_bg_path: Optional[str] = None) -> bool:
     """
     Process audio file by creating video with waveform visualization and text overlay.
     
     Searches for appropriate background image following hierarchy:
+    0. Custom background (if specified via --audio-bg-pic)
     1. Same filename with .png extension (case-insensitive)
-    2. audio_background.png 
-    3. Title screen image (if provided)
-    4. Black background
+    2. audio_background.png (case-insensitive)
+    3. Black background
     
     Args:
         filename: Path to the audio file to process
         output_path: Path where the processed video will be saved  
-        title_screen_path: Optional path to title screen for background fallback
+        custom_bg_path: Optional path to custom background image (from --audio-bg-pic)
         
     Returns:
         True if processing succeeded, False if it failed
@@ -39,7 +39,7 @@ def process_audio_file(filename: str, output_path: str, title_screen_path: Optio
     
     try:
         # Find appropriate background image
-        background_path, bg_description = find_audio_background(Path(filename).name, title_screen_path)
+        background_path, bg_description = find_audio_background(Path(filename).name, custom_bg_path)
         
         # Prepare text overlay with proper colon escaping (static text only)
         text_overlay = "Audio only submission"

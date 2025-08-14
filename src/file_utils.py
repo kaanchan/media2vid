@@ -186,19 +186,29 @@ def create_processing_order(intro_files: List[str], video_files: List[str], audi
     
     return processing_order
 
-def find_audio_background(filename: str, title_screen_path: Optional[Path] = None) -> Tuple[Optional[Path], str]:
+def find_audio_background(filename: str, custom_bg_path: Optional[str] = None) -> Tuple[Optional[Path], str]:
     """
     Find appropriate background image for audio file following the hierarchy:
+    0. Custom background (if specified via --audio-bg-pic)
     1. Same filename with .png extension (case-insensitive)
-    2. audio_background.png
-    3. Title screen image (if available)
-    4. None (will use black background)
+    2. audio_background.png (case-insensitive)
+    3. None (will use black background)
     
     Returns: (Path or None, description string)
     """
     from .config import input_dir
     
     search_dir = input_dir  # Use INPUT directory if it exists
+    
+    # 0. Check for custom background image first
+    if custom_bg_path:
+        custom_path = Path(custom_bg_path)
+        if custom_path.exists():
+            print(f"  -> Using custom background image: {custom_path.name}")
+            return (custom_path, f"custom background ({custom_path.name})")
+        else:
+            print(f"  -> Custom background not found: {custom_bg_path}")
+            # Continue with normal search if custom path doesn't exist
     
     # 1. Check for same-name PNG (case-insensitive)
     base_name = Path(filename).stem  # Get filename without extension
@@ -210,17 +220,13 @@ def find_audio_background(filename: str, title_screen_path: Optional[Path] = Non
                 print(f"  -> Found matching PNG: {file.name}")
                 return (file, f"same-name PNG ({file.name})")
     
-    # 2. Check for audio_background.png
-    audio_bg_path = search_dir / 'audio_background.png'
-    if audio_bg_path.exists():
-        print(f"  -> Found audio_background.png")
-        return (audio_bg_path, "audio_background.png")
+    # 2. Check for audio_background.png (case-insensitive)
+    for file in search_dir.iterdir():
+        if file.is_file() and file.suffix.lower() == '.png':
+            if file.stem.lower() == 'audio_background':
+                print(f"  -> Found generic audio background: {file.name}")
+                return (file, f"audio_background ({file.name})")
     
-    # 3. Use title screen if available
-    if title_screen_path and title_screen_path.exists():
-        print(f"  -> Using title screen image: {title_screen_path.name}")
-        return (title_screen_path, f"title screen ({title_screen_path.name})")
-    
-    # 4. No image found - will use black background
+    # 3. No image found - will use black background
     print(f"  -> No background image found, using black background")
     return (None, "black background")

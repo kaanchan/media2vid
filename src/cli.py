@@ -14,6 +14,7 @@ Examples:
   python media2vid.py --quiet            # Show only warnings and errors
   python media2vid.py --verbose          # Show all debug information
   python media2vid.py --silent           # Minimal output, log to file only
+  python media2vid.py --audio-bg-pic bg.png  # Use specific background for all audio files
         """
     )
     
@@ -34,6 +35,13 @@ Examples:
         '--no-file',
         action='store_true', 
         help='Disable file logging, console output only'
+    )
+    
+    parser.add_argument(
+        '--audio-bg-pic',
+        type=str,
+        metavar='FILE',
+        help='Specify background image for all audio files (overrides automatic search)'
     )
     
     return parser.parse_args()

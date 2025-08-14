@@ -815,7 +815,7 @@ def main() -> int:
                 if file_type == 'INTRO':
                     success = process_intro_file(full_filename, temp_path)
                 elif file_type == 'AUDIO':
-                    success = process_audio_file(full_filename, temp_path)
+                    success = process_audio_file(full_filename, temp_path, args.audio_bg_pic)
                 elif file_type == 'VIDEO':
                     success = process_video_file(full_filename, temp_path)
                 
