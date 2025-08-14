@@ -34,9 +34,10 @@ class TestProcessIntroFile:
         # Check that the command includes PNG input and silent audio
         args, kwargs = mock_run_ffmpeg.call_args
         cmd = args[0]
-        assert 'input.png' in cmd
-        assert 'anullsrc' in cmd
-        assert 'output.mp4' in cmd
+        cmd_str = ' '.join(cmd)
+        assert 'input.png' in cmd_str
+        assert 'anullsrc' in cmd_str
+        assert 'output.mp4' in cmd_str
     
     @patch('src.ffmpeg_utils.run_ffmpeg_with_error_handling')
     def test_process_intro_file_failure(self, mock_run_ffmpeg):
@@ -233,17 +234,17 @@ class TestFindAudioBackground:
         assert result_path.name == bg_file
         assert 'audio_background.png' in description
     
-    def test_find_audio_background_title_screen(self, mock_input_dir):
-        """Test using title screen as fallback."""
+    def test_find_audio_background_custom_path(self, mock_input_dir):
+        """Test using custom background path."""
         audio_file = "some_audio.m4a"
-        title_screen = mock_input_dir / "title.png"
-        title_screen.touch()
+        custom_bg = mock_input_dir / "custom.png"
+        custom_bg.touch()
         
         with patch('src.config.input_dir', mock_input_dir):
-            result_path, description = find_audio_background(audio_file, title_screen)
+            result_path, description = find_audio_background(audio_file, str(custom_bg))
         
-        assert result_path == title_screen
-        assert 'title screen' in description
+        assert result_path == custom_bg
+        assert 'custom background' in description
     
     def test_find_audio_background_none_found(self, mock_input_dir):
         """Test when no background is found."""
@@ -262,18 +263,22 @@ class TestFindAudioBackground:
         # Create all possible backgrounds
         same_name = "test_audio.png"
         audio_bg = "audio_background.png"
-        title_screen = mock_input_dir / "title.png"
+        custom_bg = mock_input_dir / "custom.png"
         
         (mock_input_dir / same_name).touch()
         (mock_input_dir / audio_bg).touch()
-        title_screen.touch()
+        custom_bg.touch()
         
         with patch('src.config.input_dir', mock_input_dir):
-            result_path, description = find_audio_background(audio_file, title_screen)
-        
-        # Should prefer same-name PNG over others
-        assert result_path.name == same_name
-        assert 'same-name PNG' in description
+            # Test custom background takes priority
+            result_path, description = find_audio_background(audio_file, str(custom_bg))
+            assert result_path == custom_bg
+            assert 'custom background' in description
+            
+            # Test same-name PNG takes priority over audio_background.png when no custom
+            result_path, description = find_audio_background(audio_file, None)
+            assert result_path.name == same_name
+            assert 'same-name PNG' in description
     
     def test_find_audio_background_title_screen_missing(self, mock_input_dir):
         """Test when title screen path exists but file doesn't."""

@@ -344,16 +344,17 @@ class TestRunFfmpegWithErrorHandling:
         mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
         
         with patch('src.config.use_cache', False):
-            result = run_ffmpeg_with_error_handling(
-                ['ffmpeg', '-i', 'input.mp4', 'output.mp4'],
-                "test conversion",
-                "output.mp4",
-                "input.mp4",
-                "VIDEO"
-            )
+            with patch('src.ffmpeg_utils.print_stream_info'), patch('builtins.print'):  # Mock to avoid encoding issues
+                result = run_ffmpeg_with_error_handling(
+                    ['ffmpeg', '-i', 'input.mp4', 'output.mp4'],
+                    "test conversion",
+                    "output.mp4",
+                    "input.mp4",
+                    "VIDEO"
+                )
         
         assert result is True
-        mock_run.assert_called_once()
+        mock_run.assert_called_once()  # Only ffmpeg call, stream info is mocked
     
     @patch('src.cache_system.is_cached_file_valid')
     @patch('subprocess.run')
@@ -362,17 +363,18 @@ class TestRunFfmpegWithErrorHandling:
         mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
         
         with patch('src.config.use_cache', True):
-            result = run_ffmpeg_with_error_handling(
-                ['ffmpeg', '-f', 'concat', '-i', 'list.txt', 'output.mp4'],
-                "concatenation",
-                "output.mp4",
-                "list.txt",
-                "CONCAT"
-            )
+            with patch('src.ffmpeg_utils.print_stream_info'), patch('builtins.print'):  # Mock to avoid encoding issues
+                result = run_ffmpeg_with_error_handling(
+                    ['ffmpeg', '-f', 'concat', '-i', 'list.txt', 'output.mp4'],
+                    "concatenation",
+                    "output.mp4",
+                    "list.txt",
+                    "CONCAT"
+                )
         
         assert result is True
         mock_cache_valid.assert_not_called()  # Should not check cache for CONCAT
-        mock_run.assert_called_once()
+        mock_run.assert_called_once()  # Only ffmpeg call, stream info is mocked
     
     @patch('src.cache_system.is_cached_file_valid')
     @patch('subprocess.run')

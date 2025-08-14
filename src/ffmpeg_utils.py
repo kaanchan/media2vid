@@ -83,7 +83,7 @@ def get_stream_info(file_path: str) -> Dict[str, Optional[Dict[str, str]]]:
                 if 'r_frame_rate' in stream and '/' in str(stream['r_frame_rate']):
                     try:
                         num, den = map(int, stream['r_frame_rate'].split('/'))
-                        if den != 0:
+                        if den != 0 and num != 0:
                             fps = f"{num/den:.1f}"
                     except:
                         pass

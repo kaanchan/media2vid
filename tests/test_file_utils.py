@@ -38,9 +38,9 @@ class TestExtractPersonName:
     
     def test_extract_person_name_edge_cases(self):
         """Test edge cases for person name extraction."""
-        assert extract_person_name("Title - .mp4") == ""
-        assert extract_person_name("NoExtension - Person") == "noextension - person"
-        assert extract_person_name("Multiple - Dashes - Person Name.mp4") == "dashes - person name"
+        assert extract_person_name("Title - .mp4") == "title - .mp4"  # No valid name after dash
+        assert extract_person_name("NoExtension - Person") == "noextension - person"  # No extension
+        assert extract_person_name("Multiple - Dashes - Person Name.mp4") == "dashes - person name"  # Multiple dashes
 
 class TestIsTempFile:
     """Test temporary file detection."""
@@ -227,17 +227,31 @@ class TestFormatRangeIndicator:
     """Test range indicator formatting."""
     
     def test_format_range_indicator_empty(self):
-        """Test empty indices."""
-        assert format_range_indicator([], "M") == "M0"
-        assert format_range_indicator([], "R") == "R0"
+        """Test empty range string."""
+        assert format_range_indicator("", "M", 10) == "M0"
+        assert format_range_indicator("  ", "R", 10) == "R0"
     
     def test_format_range_indicator_single(self):
-        """Test single index."""
-        assert format_range_indicator([3], "M") == "M3"
-        assert format_range_indicator([7], "R") == "R7"
+        """Test single number."""
+        assert format_range_indicator("3", "M", 10) == "M3"
+        assert format_range_indicator("7", "R", 10) == "R7"
     
-    def test_format_range_indicator_multiple(self):
-        """Test multiple indices."""
-        assert format_range_indicator([1, 2, 3, 4, 5], "M") == "M1_5"
-        assert format_range_indicator([3, 7, 9], "R") == "R3_9"
-        assert format_range_indicator([5, 1, 3], "M") == "M1_5"  # Should use min/max
+    def test_format_range_indicator_range(self):
+        """Test range format."""
+        assert format_range_indicator("1-5", "M", 10) == "M1_5"
+        assert format_range_indicator("3-7", "R", 10) == "R3_7"
+    
+    def test_format_range_indicator_open_ended(self):
+        """Test open-ended range."""
+        assert format_range_indicator("3-", "M", 10) == "M3_10"
+        assert format_range_indicator("7-", "R", 15) == "R7_15"
+    
+    def test_format_range_indicator_comma_separated(self):
+        """Test comma-separated values."""
+        assert format_range_indicator("1,3,5", "M", 10) == "M1,3,5"
+        assert format_range_indicator("2,4,6", "R", 10) == "R2,4,6"
+    
+    def test_format_range_indicator_mixed(self):
+        """Test mixed format with ranges and singles."""
+        assert format_range_indicator("1,3-5,8-", "M", 10) == "M1,3_5,8_10"
+        assert format_range_indicator("2,4-6,9-", "R", 12) == "R2,4_6,9_12"

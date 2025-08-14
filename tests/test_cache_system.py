@@ -157,6 +157,8 @@ class TestIsCachedFileValid:
         
         # Create files with temp newer than source
         source_file.write_text("content")
+        import time
+        time.sleep(0.01)  # Ensure different modification times
         temp_file.write_text("content")
         
         # Create cache file
