@@ -652,7 +652,7 @@ def get_user_input_with_timeout_cleanup() -> bool:
     
     return response in ['y', 'yes']
 
-def create_final_output(files_processed: List[Tuple[int, str, str]], action: str, selected_indices: Optional[str], temp_files_for_merge: List[str] = None) -> bool:
+def create_final_output(files_processed: List[Tuple[int, str, str]], action: str, selected_indices: Optional[str], temp_files_for_merge: List[str] = None, processing_order: List[Tuple[int, str, str]] = None) -> bool:
     """Create the final concatenated output video."""
     if not files_processed and not temp_files_for_merge:
         return False
@@ -681,9 +681,10 @@ def create_final_output(files_processed: List[Tuple[int, str, str]], action: str
     
     # Generate output filename with range indicator
     if selected_indices and action in ['R', 'M']:
-        from src.utils import parse_range
-        indices = parse_range(selected_indices, len(files_processed)) if selected_indices else []
-        range_indicator = format_range_indicator(indices, action)
+        from src.utils import format_range_indicator
+        # Use the original range input and total processing order count
+        max_files = len(processing_order) if processing_order else 19  # fallback to total files
+        range_indicator = format_range_indicator(selected_indices, action, max_files)
     else:
         range_indicator = ""
     
@@ -839,7 +840,7 @@ def main() -> int:
             return 0
         
         # Create final output (for Y and M operations only)
-        success = create_final_output(files_to_process, action, selected_indices, temp_files_for_merge)
+        success = create_final_output(files_to_process, action, selected_indices, temp_files_for_merge, processing_order)
         
         if success:
             logger.info(f"{get_icon('✅', 'SUCCESS:')} Video montage creation completed successfully!")

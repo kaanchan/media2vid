@@ -33,23 +33,55 @@ def generate_output_filename(range_info: Optional[str] = None) -> str:
     else:
         return f"{output_base_name}-MERGED-{timestamp}.mp4"
 
-def format_range_indicator(indices: List[int], operation: str) -> str:
+def format_range_indicator(range_str: str, operation: str, max_files: int) -> str:
     """
-    Format range indicator for filename (Ma_b, Ra_b, M3, R5).
+    Format range indicator for filename according to comprehensive naming convention.
+    
+    Naming Convention:
+    1. Single: "3" → "M3"
+    2. Range: "16-18" → "M16_18"  
+    3. Open-ended: "17-" → "M17_N" (where N = max_files)
+    4. Comma-separated: "1,3,5" → "M1,3,5"
+    5. Mixed: "1,3-5,17-" → "M1,3_5,17_N"
     
     Args:
-        indices: List of selected indices
-        operation: 'M' for merge or 'R' for range
+        range_str: Original range string from user input
+        operation: 'M' for merge or 'R' for re-render
+        max_files: Maximum file index for resolving open-ended ranges
         
     Returns:
-        Formatted range indicator string
+        Formatted range indicator string for filename
     """
-    if not indices:
+    if not range_str or not range_str.strip():
         return f"{operation}0"
-    elif len(indices) == 1:
-        return f"{operation}{indices[0]}"
-    else:
-        return f"{operation}{min(indices)}_{max(indices)}"
+    
+    # Split by comma and process each part
+    parts = [part.strip() for part in range_str.split(',')]
+    formatted_parts = []
+    
+    for part in parts:
+        if not part:
+            continue
+            
+        if '-' in part:
+            # Handle range (including open-ended)
+            range_parts = part.split('-', 1)
+            start_str = range_parts[0].strip()
+            end_str = range_parts[1].strip()
+            
+            if not end_str:
+                # Open-ended range: "17-" → "17_N"
+                formatted_parts.append(f"{start_str}_{max_files}")
+            else:
+                # Complete range: "16-18" → "16_18"
+                formatted_parts.append(f"{start_str}_{end_str}")
+        else:
+            # Single number: "3" → "3"
+            formatted_parts.append(part)
+    
+    # Join parts with comma and prefix with operation
+    range_part = ','.join(formatted_parts)
+    return f"{operation}{range_part}"
 
 def parse_range(range_str: str, max_files: int) -> List[int]:
     """
