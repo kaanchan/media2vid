@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a video montage creation script (`merge_media2mp4-DEV.py`) that processes multiple media files (video, audio, images) from an INPUT directory and creates a merged video montage. The script handles different media types with appropriate processing:
+This is a video montage creation script (`media2vid.py`) that processes multiple media files (video, audio, images) from an INPUT directory and creates a merged video montage. The script handles different media types with appropriate processing:
 
 - **Video files**: Direct processing with standardization
 - **Audio files**: Creates video with waveform visualization and background images
@@ -15,10 +15,10 @@ This is a video montage creation script (`merge_media2mp4-DEV.py`) that processe
 
 ### Running the Script
 ```bash
-python merge_media2mp4-DEV.py                    # Normal operation with colored output
-python merge_media2mp4-DEV.py --quiet            # Show only warnings and errors  
-python merge_media2mp4-DEV.py --verbose          # Show all debug information
-python merge_media2mp4-DEV.py --silent           # Minimal output, log to file only
+python media2vid.py                    # Normal operation with colored output
+python media2vid.py --quiet            # Show only warnings and errors  
+python media2vid.py --verbose          # Show all debug information
+python media2vid.py --silent           # Minimal output, log to file only
 ```
 
 ### Dependencies
