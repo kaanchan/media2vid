@@ -971,7 +971,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     logger.info("  <M> - Merge existing temp files (with optional range)", extra={'color': 'magenta'})
     logger.info("  <C> - Clear cache (delete temp_ directory and .cache files)")
     logger.info("  <O> - Organize directory (move files to INPUT/OUTPUT/LOGS)")
-    logger.error("  <N> - Cancel and exit")
+    logger.error("  <N/Q/ESC> - Cancel and exit")
     logger.info("")
     
     # Timeout functionality with pause support
@@ -997,7 +997,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         if remaining == 0:
             break
             
-        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... (Y/Enter/P/R=re-render/M=merge/C/O/N): {Style.RESET_ALL}", 
+        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q/Esc]): {Style.RESET_ALL}", 
               end="", flush=True)
         
         # Start input thread if not already running
@@ -1015,7 +1015,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
                 break
             elif response == 'P':
                 paused = True
-                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press Y/Enter to continue, R for range, M for merge, C to clear cache, O to organize, or N to cancel.{Style.RESET_ALL}")
+                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press [Y/Enter] to continue, R for range, M for merge, C to clear cache, O to organize, or [N/Q/Esc] to cancel.{Style.RESET_ALL}")
                 break
             elif response == 'R':
                 print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
@@ -1033,13 +1033,13 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
                 print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
                 action = 'O'
                 break
-            elif response == 'N':
+            elif response in ['N', 'Q', '\x1b']:
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 raise KeyboardInterrupt("User cancelled")
     
     # Handle paused state - wait indefinitely until user input
     while paused:
-        print(f"{Fore.YELLOW}PAUSED - Options: Y/Enter/R/M/C/O/N: {Style.RESET_ALL}", 
+        print(f"{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q/Esc]: {Style.RESET_ALL}", 
               end="", flush=True)
         
         # Reset input for paused state
@@ -1059,25 +1059,29 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
             break
         elif response == 'R':
             print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
+            paused = False
             action = 'R'
             break
         elif response == 'M':
             print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
+            paused = False
             action = 'M'
             break
         elif response == 'C':
             print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
+            paused = False
             action = 'C'
             break
         elif response == 'O':
             print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
+            paused = False
             action = 'O'
             break
-        elif response == 'N':
+        elif response in ['N', 'Q', '\x1b']:
             print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
             raise KeyboardInterrupt("User cancelled")
         else:
-            print(f"\n{Fore.RED}Invalid key. Press Y/Enter to continue, R for range, M for merge, C to clear cache, O to organize, or N to cancel.{Style.RESET_ALL}")
+            print(f"\n{Fore.RED}Invalid key. Press [Y/Enter] to continue, R for range, M for merge, C to clear cache, O to organize, or [N/Q/Esc] to cancel.{Style.RESET_ALL}")
     
     # Auto-continue message if countdown completed without pause
     if not paused and 'action' not in locals():
