@@ -91,8 +91,18 @@ def display_processing_order(processing_order: List[Tuple[int, str, str]], ignor
     print(f"\n{Fore.CYAN}📋 Processing Order:{Style.RESET_ALL}")
     for index, filename, file_type in processing_order:
         person_name = extract_person_name(Path(filename).name)
-        type_color = Fore.MAGENTA if file_type == 'INTRO' else Fore.BLUE if file_type == 'VIDEO' else Fore.GREEN
-        print(f"{Fore.WHITE}{index:2d}.{Style.RESET_ALL} {type_color}{file_type:<5}{Style.RESET_ALL} {person_name}")
+        
+        # Use emoticons instead of text for file types
+        if file_type == 'INTRO':
+            type_icon = f"{Fore.MAGENTA}🖼️ {Style.RESET_ALL}"
+        elif file_type == 'VIDEO':
+            type_icon = f"{Fore.BLUE}🎥{Style.RESET_ALL}"
+        else:  # AUDIO
+            type_icon = f"{Fore.GREEN}🎵{Style.RESET_ALL}"
+        
+        # Show person name with filename in parentheses
+        display_name = f"{person_name} ({Path(filename).name})"
+        print(f"{Fore.WHITE}{index:2d}.{Style.RESET_ALL} {type_icon} {display_name}")
     
     if ignored_files:
         print(f"\n{Fore.YELLOW}📝 Ignored Files:{Style.RESET_ALL}")
@@ -603,10 +613,14 @@ def main() -> int:
         logger.info("=== Starting Video Processing ===", extra={'color': 'green'})
         
         # Environment validation
-        validate_environment()
+        try:
+            validate_environment(logger)
+        except EnvironmentError as e:
+            logger.error(f"Environment validation failed: {e}")
+            return 1
         
         # File discovery
-        logger.info("📁 Discovering and categorizing media files...")
+        logger.info("Auto-detecting and sorting media files...")
         categorized_files = discover_media_files(input_dir)
         
         # Check if we have any files
