@@ -49,7 +49,7 @@ from src.logging_setup import setup_logging
 from src.environment import validate_environment
 from src.file_utils import discover_media_files, categorize_media_files, extract_person_name, is_temp_file
 from src.utils import generate_output_filename, format_range_indicator, parse_range
-from src.config import input_dir, get_media_extensions
+from src.config import input_dir, output_dir, logs_dir, get_media_extensions
 from src.exceptions import VideoProcessingError, FFmpegError, EnvironmentError
 
 class UserInterruptError(Exception):
@@ -568,9 +568,10 @@ def create_final_output(files_processed: List[Tuple[int, str, str]], action: str
         range_indicator = ""
     
     output_filename = generate_output_filename(range_indicator)
-    output_dir = Path("OUTPUT")
-    output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / output_filename
+    # Use configured output directory instead of hardcoded "OUTPUT"
+    from src.config import output_dir as configured_output_dir
+    configured_output_dir.mkdir(exist_ok=True)
+    output_path = configured_output_dir / output_filename
     
     # Build concatenation command
     from src.ffmpeg_utils import run_ffmpeg_with_error_handling
@@ -619,9 +620,22 @@ def main() -> int:
             logger.error(f"Environment validation failed: {e}")
             return 1
         
-        # File discovery
+        # File discovery  
         logger.info("Auto-detecting and sorting media files...")
         categorized_files = discover_media_files(input_dir)
+        
+        # Show directory structure status
+        logger.info("Directory structure:")
+        logger.info(f"  INPUT: {input_dir}")
+        logger.info(f"  OUTPUT: {output_dir}")
+        logger.info(f"  LOGS: {logs_dir}")
+        
+        # Check for empty INPUT directory warning
+        if input_dir.name == "INPUT" and input_dir.exists():
+            input_files = [f for f in input_dir.iterdir() if not is_temp_file(f)]
+            if not input_files:
+                logger.warning("INPUT directory exists but is empty!")
+                logger.warning("Use O operation to organize files into INPUT directory.")
         
         # Check if we have any files
         total_files_count = sum(len(files) for files in categorized_files.values() if files)
@@ -673,15 +687,17 @@ def main() -> int:
             for index, filename, file_type in files_to_process:
                 logger.info(f"[{index}/{total_files}] Processing {file_type}: {Path(filename).name}")
                 
+                # CRITICAL FIX: Construct full path using input directory
+                full_filename = str(input_dir / filename)
                 temp_path = f"temp_/temp_{index-1}.mp4"
                 success = False
                 
                 if file_type == 'INTRO':
-                    success = process_intro_file(filename, temp_path)
+                    success = process_intro_file(full_filename, temp_path)
                 elif file_type == 'AUDIO':
-                    success = process_audio_file(filename, temp_path)
+                    success = process_audio_file(full_filename, temp_path)
                 elif file_type == 'VIDEO':
-                    success = process_video_file(filename, temp_path)
+                    success = process_video_file(full_filename, temp_path)
                 
                 if not success:
                     logger.error(f"Failed to process {file_type} file: {Path(filename).name}")
