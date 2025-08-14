@@ -172,7 +172,7 @@ def run_ffmpeg_with_error_handling(cmd: List[str], description: str, output_path
         
         return True
     except subprocess.CalledProcessError as e:
-        print(f"{Fore.RED}  ✗ FAILED: {description}{Style.RESET_ALL}")
+        print(f"{Fore.RED}  ERROR: {description}{Style.RESET_ALL}")
         print(f"{Fore.RED}Exit code: {e.returncode}{Style.RESET_ALL}")
         print()
         

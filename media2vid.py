@@ -65,6 +65,43 @@ except ImportError:
     class Style:
         RESET_ALL = DIM = BRIGHT = ""
 
+def detect_utf8_support() -> bool:
+    """
+    Test if the terminal/environment supports UTF-8 emoji output.
+    
+    Returns:
+        True if UTF-8 emojis work, False if we should use fallback
+    """
+    try:
+        # Try to write a test emoji and see if it works
+        import sys
+        test_emoji = "🎥"
+        
+        # Check encoding support
+        if hasattr(sys.stdout, 'encoding'):
+            encoding = sys.stdout.encoding or 'ascii'
+            if encoding.lower() in ['ascii', 'cp1252', 'windows-1252']:
+                return False
+        
+        # Try actual write test
+        try:
+            # Test if we can encode the emoji
+            test_emoji.encode(sys.stdout.encoding or 'utf-8')
+            return True
+        except (UnicodeEncodeError, LookupError):
+            return False
+            
+    except Exception:
+        # If anything fails, use safe fallback
+        return False
+
+# Test UTF-8 support once at startup
+USE_EMOJIS = detect_utf8_support()
+
+def get_icon(emoji: str, fallback: str) -> str:
+    """Get emoji or fallback text based on UTF-8 support."""
+    return emoji if USE_EMOJIS else fallback
+
 def create_processing_order(categorized_files):
     """Create numbered processing order from categorized files."""
     processing_order = []
@@ -88,26 +125,41 @@ def create_processing_order(categorized_files):
 
 def display_processing_order(processing_order: List[Tuple[int, str, str]], ignored_files: List[str]) -> None:
     """Display the numbered processing order to the user."""
-    print(f"\n{Fore.CYAN}📋 Processing Order:{Style.RESET_ALL}")
+    if USE_EMOJIS:
+        header = f"\n{Fore.CYAN}📋 Processing Order:{Style.RESET_ALL}"
+        intro_icon = f"{Fore.MAGENTA}🖼️ {Style.RESET_ALL}"
+        video_icon = f"{Fore.BLUE}🎥{Style.RESET_ALL}"
+        audio_icon = f"{Fore.GREEN}🎵{Style.RESET_ALL}"
+        ignored_header = f"\n{Fore.YELLOW}📝 Ignored Files:{Style.RESET_ALL}"
+        ignored_prefix = f"{Fore.YELLOW}⊘{Style.RESET_ALL}"
+    else:
+        header = f"\n{Fore.CYAN}Processing Order:{Style.RESET_ALL}"
+        intro_icon = f"{Fore.MAGENTA}[IMG]{Style.RESET_ALL}"
+        video_icon = f"{Fore.BLUE}[VID]{Style.RESET_ALL}"
+        audio_icon = f"{Fore.GREEN}[AUD]{Style.RESET_ALL}"
+        ignored_header = f"\n{Fore.YELLOW}Ignored Files:{Style.RESET_ALL}"
+        ignored_prefix = f"{Fore.YELLOW}X{Style.RESET_ALL}"
+    
+    print(header)
     for index, filename, file_type in processing_order:
         person_name = extract_person_name(Path(filename).name)
         
-        # Use emoticons instead of text for file types
+        # Use appropriate icons based on UTF-8 support
         if file_type == 'INTRO':
-            type_icon = f"{Fore.MAGENTA}🖼️ {Style.RESET_ALL}"
+            type_icon = intro_icon
         elif file_type == 'VIDEO':
-            type_icon = f"{Fore.BLUE}🎥{Style.RESET_ALL}"
+            type_icon = video_icon
         else:  # AUDIO
-            type_icon = f"{Fore.GREEN}🎵{Style.RESET_ALL}"
+            type_icon = audio_icon
         
         # Show person name with filename in parentheses
         display_name = f"{person_name} ({Path(filename).name})"
         print(f"{Fore.WHITE}{index:2d}.{Style.RESET_ALL} {type_icon} {display_name}")
     
     if ignored_files:
-        print(f"\n{Fore.YELLOW}📝 Ignored Files:{Style.RESET_ALL}")
+        print(ignored_header)
         for filename in ignored_files:
-            print(f"   {Fore.YELLOW}⊘{Style.RESET_ALL} {filename}")
+            print(f"   {ignored_prefix} {filename}")
     print()
 
 def get_overwrite_confirmation(filename: str) -> bool:
@@ -165,7 +217,7 @@ def clear_cache() -> None:
             print(f"{Fore.GREEN}  ✓ Removed temp_ directory{Style.RESET_ALL}")
             removed_count += 1
         except Exception as e:
-            print(f"{Fore.RED}  ✗ Failed to remove temp_ directory: {e}{Style.RESET_ALL}")
+            print(f"{Fore.RED}  {get_icon('✗', 'ERROR:')} Failed to remove temp_ directory: {e}{Style.RESET_ALL}")
     else:
         print(f"{Fore.YELLOW}  ⊘ temp_ directory not found{Style.RESET_ALL}")
     
@@ -178,7 +230,7 @@ def clear_cache() -> None:
             cache_file.unlink()
             cache_files_removed += 1
         except Exception as e:
-            print(f"{Fore.RED}  ✗ Failed to remove {cache_file.name}: {e}{Style.RESET_ALL}")
+            print(f"{Fore.RED}  {get_icon('✗', 'ERROR:')} Failed to remove {cache_file.name}: {e}{Style.RESET_ALL}")
     
     if cache_files_removed > 0:
         print(f"{Fore.GREEN}  ✓ Removed {cache_files_removed} .cache files{Style.RESET_ALL}")
@@ -527,13 +579,78 @@ def determine_files_to_process(action: str, selected_indices: Optional[str], pro
     elif action in ['Y', 'R']:
         # Handle normal processing or re-render mode
         files_to_process = []
+        temp_dir = Path("temp_")
+        
         for index, filename, file_type in processing_order:
             if index in indices:
                 files_to_process.append((index, filename, file_type))
+                
+                # For R operation: delete cache files to force re-rendering
+                if action == 'R':
+                    temp_file_path = temp_dir / f"temp_{index-1}.mp4"
+                    cache_file_path = temp_file_path.with_suffix('.cache')
+                    if cache_file_path.exists():
+                        try:
+                            cache_file_path.unlink()
+                            print(f"{Fore.CYAN}  {get_icon('✓', 'OK:')} Removed cache for temp_{index-1}.mp4 (forcing re-render){Style.RESET_ALL}")
+                        except Exception as e:
+                            print(f"{Fore.YELLOW}  {get_icon('⚠', 'WARNING:')} Could not remove cache file {cache_file_path.name}: {e}{Style.RESET_ALL}")
         
         return files_to_process, temp_files_for_merge
     
     return [], temp_files_for_merge
+
+def get_user_input_with_timeout_cleanup() -> bool:
+    """
+    Handle cleanup prompt with 5-second timeout defaulting to preserve files.
+    
+    Returns:
+        True if user wants to delete temp files, False otherwise (default)
+    """
+    print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
+    
+    # Use threading for non-blocking input with timeout
+    input_result = [None]
+    
+    def get_input():
+        try:
+            input_result[0] = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            input_result[0] = "n"
+    
+    # Start input thread
+    input_thread = threading.Thread(target=get_input, daemon=True)
+    input_thread.start()
+    
+    # Wait up to 5 seconds for input with countdown display
+    start_time = time.time()
+    last_remaining = 5
+    
+    while time.time() - start_time < 5.0:
+        if input_result[0] is not None:
+            break
+        
+        # Calculate remaining time and update display
+        elapsed = time.time() - start_time
+        remaining = max(0, 5 - int(elapsed))
+        
+        # Only update display when remaining time changes
+        if remaining != last_remaining:
+            # Clear the line and reprint with new countdown
+            print(f"\r{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in {remaining} seconds): {Style.RESET_ALL}", end="", flush=True)
+            last_remaining = remaining
+        
+        time.sleep(0.1)
+    
+    # Get result or default to 'n'
+    response = input_result[0] if input_result[0] is not None else "n"
+    
+    if input_result[0] is None:
+        print("n (timed out)")
+    else:
+        print()  # Add newline after user input
+    
+    return response in ['y', 'yes']
 
 def create_final_output(files_processed: List[Tuple[int, str, str]], action: str, selected_indices: Optional[str], temp_files_for_merge: List[str] = None) -> bool:
     """Create the final concatenated output video."""
@@ -585,7 +702,7 @@ def create_final_output(files_processed: List[Tuple[int, str, str]], action: str
         str(output_path)
     ]
     
-    print(f"\n{Fore.MAGENTA}🎞️  Creating final output: {output_filename}{Style.RESET_ALL}")
+    print(f"\n{Fore.MAGENTA}{get_icon('🎞️', 'Creating')} Creating final output: {output_filename}{Style.RESET_ALL}")
     
     return run_ffmpeg_with_error_handling(
         cmd, 
@@ -672,7 +789,7 @@ def main() -> int:
         
         # Process files if needed
         if files_to_process:
-            logger.info(f"🎯 Processing {len(files_to_process)} selected files...")
+            logger.info(f"{get_icon('🎯', 'Processing')} Processing {len(files_to_process)} selected files...")
             
             # Import processing functions
             from src.processors.intro_processor import process_intro_file
@@ -704,31 +821,46 @@ def main() -> int:
                     failed_files.append(filename)
             
             if failed_files:
-                logger.warning(f"⚠️  {len(failed_files)} files failed processing")
+                logger.warning(f"{get_icon('⚠️', 'WARNING:')} {len(failed_files)} files failed processing")
         else:
-            logger.info("🎯 Using existing temp files for merge...")
+            logger.info(f"{get_icon('🎯', 'Processing')} Using existing temp files for merge...")
         
         # Create final output
         success = create_final_output(files_to_process, action, selected_indices, temp_files_for_merge)
         
         if success:
-            logger.info("✅ Video montage creation completed successfully!")
+            logger.info(f"{get_icon('✅', 'SUCCESS:')} Video montage creation completed successfully!")
+            
+            # Offer cleanup with 5-second timeout (like original)
+            should_cleanup = get_user_input_with_timeout_cleanup()
+            
+            if should_cleanup:
+                temp_dir = Path("temp_")
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                    print(f"{Fore.GREEN}Cleanup complete - temp directory and files removed!{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.YELLOW}temp_ directory not found{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.CYAN}Temp directory 'temp_' and files preserved.{Style.RESET_ALL}")
+            
             return 0
         else:
-            logger.error("❌ Failed to create final merged video")
+            logger.error(f"{get_icon('❌', 'ERROR:')} Failed to create final merged video")
+            logger.info(f"Temp directory 'temp_' and files preserved for debugging.")
             return 1
             
     except KeyboardInterrupt:
-        print("\n🛑 Process interrupted by user")
+        print(f"\n{get_icon('🛑', 'STOPPED:')} Process interrupted by user")
         return 1
     except UserInterruptError as e:
-        print(f"\n🛑 {e}")
+        print(f"\n{get_icon('🛑', 'STOPPED:')} {e}")
         return 1
     except SystemExit as e:
         # Handle special operations that exit cleanly
         return e.code if e.code is not None else 0
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"{get_icon('❌', 'ERROR:')} Unexpected error: {e}")
         return 1
 
 if __name__ == "__main__":

@@ -76,5 +76,5 @@ def process_audio_file(filename: str, output_path: str, title_screen_path: Optio
         return run_ffmpeg_with_error_handling(cmd, f"audio file {Path(filename).name} with black background", output_path, filename, 'AUDIO')
         
     except Exception as e:
-        print(f"{Fore.RED}  ✗ FAILED: Unexpected error processing audio file {Path(filename).name}: {e}{Style.RESET_ALL}")
+        print(f"{Fore.RED}  ERROR: Unexpected error processing audio file {Path(filename).name}: {e}{Style.RESET_ALL}")
         return False

@@ -47,5 +47,5 @@ def process_intro_file(filename: str, output_path: str, title_screen_path: Optio
         return run_ffmpeg_with_error_handling(cmd, f"intro file {Path(filename).name}", output_path, filename, 'INTRO')
         
     except Exception as e:
-        print(f"{Fore.RED}  ✗ FAILED: Unexpected error processing intro file {Path(filename).name}: {e}{Style.RESET_ALL}")
+        print(f"{Fore.RED}  ERROR: Unexpected error processing intro file {Path(filename).name}: {e}{Style.RESET_ALL}")
         return False
