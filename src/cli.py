@@ -44,4 +44,11 @@ Examples:
         help='Specify background image for all audio files (overrides automatic search)'
     )
     
+    parser.add_argument(
+        '--intro-pic',
+        type=str,
+        metavar='FILE',
+        help='Specify intro screen image (overrides automatic PNG detection)'
+    )
+    
     return parser.parse_args()

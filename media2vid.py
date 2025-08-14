@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from src.cli import parse_arguments
 from src.logging_setup import setup_logging
 from src.environment import validate_environment
-from src.file_utils import discover_media_files, categorize_media_files, extract_person_name, is_temp_file
+from src.file_utils import discover_media_files, categorize_media_files, extract_person_name, is_temp_file, create_processing_order
 from src.utils import generate_output_filename, format_range_indicator, parse_range
 from src.config import input_dir, output_dir, logs_dir, get_media_extensions
 from src.exceptions import VideoProcessingError, FFmpegError, EnvironmentError
@@ -102,26 +102,6 @@ def get_icon(emoji: str, fallback: str) -> str:
     """Get emoji or fallback text based on UTF-8 support."""
     return emoji if USE_EMOJIS else fallback
 
-def create_processing_order(categorized_files):
-    """Create numbered processing order from categorized files."""
-    processing_order = []
-    
-    # Add intro files first
-    for filename in categorized_files.get('intro', []):
-        temp_path = f"temp_/temp_{len(processing_order)}.mp4"
-        processing_order.append((len(processing_order) + 1, filename, 'INTRO'))
-    
-    # Add video files
-    for filename in categorized_files.get('video', []):
-        temp_path = f"temp_/temp_{len(processing_order)}.mp4"
-        processing_order.append((len(processing_order) + 1, filename, 'VIDEO'))
-    
-    # Add audio files
-    for filename in categorized_files.get('audio', []):
-        temp_path = f"temp_/temp_{len(processing_order)}.mp4"
-        processing_order.append((len(processing_order) + 1, filename, 'AUDIO'))
-    
-    return processing_order
 
 def display_processing_order(processing_order: List[Tuple[int, str, str]], ignored_files: List[str]) -> None:
     """Display the numbered processing order to the user."""
@@ -362,7 +342,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     - M: Merge specific range
     - C: Clear cache
     - O: Organize directory
-    - N: Cancel and exit
+    - N/Q/ESC: Cancel and exit
     
     Returns:
         Tuple of (action, selected_indices)
@@ -371,7 +351,9 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         
     Note:
         C and O operations are handled immediately and exit the program.
+        ESC key support improved for better exit functionality.
     """
+    
     print(f"{Fore.CYAN}=== CONFIRMATION ==={Style.RESET_ALL}")
     print("Ready to process media files.")
     print("")
@@ -389,19 +371,25 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     timeout_seconds = 20
     paused = False
     start_time = time.time()
+    action = None
     
-    # Use threading for non-blocking input
+    # Use threading for fallback input (Enter-based)
     input_result = [None]
     input_thread = None
     
-    def get_input():
+    def get_fallback_input():
         try:
-            input_result[0] = input().strip().upper()
+            user_input = input().strip()
+            # Handle ESC character if present
+            if '\x1b' in user_input:
+                input_result[0] = "ESC"
+            else:
+                input_result[0] = user_input.upper()
         except (EOFError, KeyboardInterrupt):
-            input_result[0] = "N"
+            input_result[0] = "ESC"
     
-    # Main countdown loop with proper pause handling
-    while not paused:
+    # Main countdown loop with immediate and fallback input
+    while not paused and action is None:
         elapsed = time.time() - start_time
         remaining = max(0, timeout_seconds - int(elapsed))
         
@@ -411,13 +399,12 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q/Esc]): {Style.RESET_ALL}", 
               end="", flush=True)
         
-        # Start input thread if not already running
+        # Check for input with better ESC key support
         if input_thread is None or not input_thread.is_alive():
-            input_thread = threading.Thread(target=get_input, daemon=True)
+            input_thread = threading.Thread(target=get_fallback_input, daemon=True)
             input_thread.start()
         
-        # Check for input
-        time.sleep(0.1)
+        # Check fallback input (Enter-based)
         if input_result[0] is not None:
             response = input_result[0]
             if response in ['Y', '']:
@@ -444,18 +431,20 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
                 print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
                 action = 'O'
                 break
-            elif response in ['N', 'Q', '\x1b']:
+            elif response in ['N', 'Q', 'ESC']:
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 raise UserInterruptError("User cancelled")
     
     # Handle paused state - wait indefinitely until user input
-    while paused:
-        print(f"{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q/Esc]: {Style.RESET_ALL}", end="", flush=True)
+    while paused and action is None:
+        print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q/Esc]: {Style.RESET_ALL}", end="", flush=True)
         
         # Reset input for paused state
         input_result[0] = None
-        input_thread = threading.Thread(target=get_input, daemon=True)
-        input_thread.start()
+        paused_input_thread = None
+        
+        paused_input_thread = threading.Thread(target=get_fallback_input, daemon=True)
+        paused_input_thread.start()
         
         # Wait for input indefinitely when paused
         while input_result[0] is None:
@@ -465,31 +454,29 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         if response in ['Y', '']:
             print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
             action = 'Y'
-            break
         elif response == 'R':
             print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
             action = 'R'
-            break
         elif response == 'M':
             print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
             action = 'M'
-            break
         elif response == 'C':
             print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
             action = 'C'
-            break
         elif response == 'O':
             print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
             action = 'O'
-            break
-        elif response in ['N', 'Q', '\x1b']:
+        elif response in ['N', 'Q', 'ESC']:
             print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
             raise UserInterruptError("User cancelled")
         else:
             print(f"\n{Fore.RED}Invalid option: {response}. Please try again.{Style.RESET_ALL}")
+            # Reset and try again
+            input_result[0] = None
+        break  # Exit paused loop when action is set
     
     # If timeout occurred, default to Y
-    if not paused and 'action' not in locals():
+    if action is None:
         print(f"\n{Fore.GREEN}Timeout - continuing with all files...{Style.RESET_ALL}")
         action = 'Y'
     
@@ -764,8 +751,13 @@ def main() -> int:
             logger.warning("No valid media files found for processing")
             return 0
         
-        # Create processing order
-        processing_order = create_processing_order(categorized_files)
+        # Create processing order with smart intro detection
+        processing_order = create_processing_order(
+            categorized_files.get('intro', []),
+            categorized_files.get('video', []), 
+            categorized_files.get('audio', []),
+            args.intro_pic
+        )
         total_files = len(processing_order)
         logger.info(f"Found {total_files} media files for processing")
         

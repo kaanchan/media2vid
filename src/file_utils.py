@@ -147,32 +147,35 @@ def discover_media_files(search_dir: Path) -> Dict[str, List[str]]:
     # Categorize files using existing function
     return categorize_media_files(all_files)
 
-def create_processing_order(intro_files: List[str], video_files: List[str], audio_files: List[str]) -> List[Tuple[int, str, str]]:
+def create_processing_order(intro_files: List[str], video_files: List[str], audio_files: List[str], custom_intro_path: Optional[str] = None) -> List[Tuple[int, str, str]]:
     """
     Create numbered processing order from categorized media files.
     
+    Uses smart intro detection logic instead of just using first PNG found.
+    
     Assigns sequential numbers to files in processing order:
-    1. Intro files (PNG) - first intro only
+    1. Intro file (PNG) - smart detection based on multiple PNG logic
     2. Video files - in sorted order
     3. Audio files - in sorted order
     
     Args:
-        intro_files: List of PNG filenames
+        intro_files: List of PNG filenames (all PNGs found)
         video_files: List of video filenames (pre-sorted)
         audio_files: List of audio filenames (pre-sorted)
+        custom_intro_path: Optional path to custom intro image from --intro-pic
         
     Returns:
         List of tuples: (index, filename, file_type)
-        Example: [(1, 'title.png', 'INTRO'), (2, 'video.mp4', 'VIDEO'), ...]
+        Example: [(1, 'intro_pic.png', 'INTRO'), (2, 'video.mp4', 'VIDEO'), ...]
     """
     processing_order = []
     current_index = 1
     
-    # Add intro files first (only use first PNG found)
-    if intro_files:
-        for intro_file in intro_files[:1]:
-            processing_order.append((current_index, intro_file, 'INTRO'))
-            current_index += 1
+    # Smart intro detection
+    intro_image = find_intro_image(intro_files, custom_intro_path)
+    if intro_image:
+        processing_order.append((current_index, intro_image, 'INTRO'))
+        current_index += 1
     
     # Add video files
     for video_file in video_files:
@@ -230,3 +233,55 @@ def find_audio_background(filename: str, custom_bg_path: Optional[str] = None) -
     # 3. No image found - will use black background
     print(f"  -> No background image found, using black background")
     return (None, "black background")
+
+def find_intro_image(all_png_files: List[str], custom_intro_path: Optional[str] = None) -> Optional[str]:
+    """
+    Find appropriate intro image based on smart detection logic.
+    
+    Priority order:
+    0. Custom intro (if specified via --intro-pic)
+    1. Single PNG → use as intro
+    2. Multiple PNGs → look for intro_pic.png (case-insensitive)  
+    3. Multiple PNGs, no intro_pic.png → no intro screen
+    
+    Args:
+        all_png_files: List of all PNG filenames found
+        custom_intro_path: Optional custom intro path from --intro-pic
+        
+    Returns:
+        Filename of intro image to use, or None if no intro should be created
+    """
+    from .config import input_dir
+    
+    # 0. Check for custom intro image first
+    if custom_intro_path:
+        custom_path = Path(custom_intro_path)
+        if custom_path.exists():
+            print(f"  -> Using custom intro image: {custom_path.name}")
+            return custom_path.name
+        else:
+            print(f"  -> Custom intro not found: {custom_intro_path}, falling back to auto-detection")
+            # Continue with normal detection if custom path doesn't exist
+    
+    # 1. Single PNG → use as intro (existing behavior)
+    if len(all_png_files) == 1:
+        print(f"  -> Single PNG found, using as intro: {all_png_files[0]}")
+        return all_png_files[0]
+    
+    # 2. Multiple PNGs → look for intro_pic.png (case-insensitive)
+    elif len(all_png_files) > 1:
+        print(f"  -> Multiple PNGs found ({len(all_png_files)}), searching for intro_pic.png...")
+        
+        # Search for intro_pic.png (case-insensitive)
+        for png_file in all_png_files:
+            if Path(png_file).stem.lower() == 'intro_pic':
+                print(f"  -> Found intro_pic file: {png_file}")
+                return png_file
+        
+        # No intro_pic.png found
+        print(f"  -> No intro_pic.png found among {len(all_png_files)} PNG files, skipping intro screen")
+        return None
+    
+    # 3. No PNG files
+    print(f"  -> No PNG files found, no intro screen")
+    return None
