@@ -498,7 +498,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     if action in ['R', 'M']:
         while True:
             try:
-                range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', or Enter for all): {Style.RESET_ALL}").strip()
+                range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
                 
                 if not range_input:
                     selected_indices = None

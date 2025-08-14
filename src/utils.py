@@ -53,54 +53,89 @@ def format_range_indicator(indices: List[int], operation: str) -> str:
 
 def parse_range(range_str: str, max_files: int) -> List[int]:
     """
-    Parse range string like '1-5' or '3' into list of indices.
+    Parse range string with full support for complex range syntax.
+    
+    Supported formats:
+    - Single: '3' → [3]
+    - Range: '1-5' → [1, 2, 3, 4, 5]  
+    - Open-ended: '3-' → [3, 4, ..., max_files]
+    - Comma-separated: '1,3,5' → [1, 3, 5]
+    - Mixed: '1,3-5,8-' → [1, 3, 4, 5, 8, 9, ..., max_files]
+    - Empty: '' → [1, 2, ..., max_files] (all files)
     
     Args:
-        range_str: String containing range (e.g., '1-5') or single number
+        range_str: String containing range specification
         max_files: Maximum valid file index
         
     Returns:
-        List of indices within valid range, or empty list if invalid input
+        List of unique indices within valid range (1 to max_files), sorted
         
     Examples:
         >>> parse_range('1-5', 10)
         [1, 2, 3, 4, 5]
-        >>> parse_range('3', 10)
-        [3]
-        >>> parse_range('', 5)
-        [1, 2, 3, 4, 5]
+        >>> parse_range('3-', 10)  
+        [3, 4, 5, 6, 7, 8, 9, 10]
+        >>> parse_range('1,3,5-7', 10)
+        [1, 3, 5, 6, 7]
     """
     range_str = range_str.strip()
     
+    # Empty string means all files
     if not range_str:
         return list(range(1, max_files + 1))
     
-    if '-' in range_str:
-        parts = range_str.split('-', 1)
-        try:
-            start = int(parts[0].strip())
-            end = int(parts[1].strip())
+    indices = set()  # Use set to avoid duplicates
+    
+    # Split by comma for multiple ranges/numbers
+    parts = [part.strip() for part in range_str.split(',')]
+    
+    for part in parts:
+        if not part:
+            continue
             
-            # Swap if backwards
-            if start > end:
-                start, end = end, start
+        if '-' in part:
+            # Handle range (including open-ended)
+            range_parts = part.split('-', 1)
+            try:
+                start_str = range_parts[0].strip()
+                end_str = range_parts[1].strip()
                 
-            # Clamp to valid range
-            start = max(1, start)
-            end = min(max_files, end)
-            
-            return list(range(start, end + 1))
-        except ValueError:
-            print("Invalid range format. Use format like '1-5' or single number.")
-            return []
-    else:
-        try:
-            num = int(range_str)
-            num = max(1, min(max_files, num))
-            return [num]
-        except ValueError:
-            print("Invalid number format.")
-            return []
+                start = int(start_str)
+                
+                # Handle open-ended range (e.g., '3-')
+                if not end_str:
+                    end = max_files
+                else:
+                    end = int(end_str)
+                
+                # Swap if backwards
+                if start > end:
+                    start, end = end, start
+                    
+                # Clamp to valid range
+                start = max(1, start)
+                end = min(max_files, end)
+                
+                # Add all numbers in range
+                for i in range(start, end + 1):
+                    indices.add(i)
+                    
+            except ValueError:
+                print(f"Invalid range format: '{part}'. Use format like '1-5' or '3-'.")
+                continue
+        else:
+            # Handle single number
+            try:
+                num = int(part)
+                # Clamp to valid range
+                num = max(1, min(max_files, num))
+                indices.add(num)
+            except ValueError:
+                print(f"Invalid number format: '{part}'.")
+                continue
+    
+    # Return sorted list of unique indices
+    return sorted(list(indices))
 
 def determine_files_to_process(action: str, selected_indices: Optional[List[int]], processing_order: List[Tuple[int, str, str]]) -> Tuple[List[Tuple[int, str, str]], List[str]]:
     """
