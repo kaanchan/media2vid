@@ -668,13 +668,16 @@ def create_final_output(files_processed: List[Tuple[int, str, str]], action: str
             # Use provided temp files for merge
             for temp_path in temp_files_for_merge:
                 if Path(temp_path).exists():
-                    f.write(f"file '{temp_path}'\n")
+                    # Use relative path since filelist.txt is inside temp_ directory
+                    relative_path = Path(temp_path).name
+                    f.write(f"file '{relative_path}'\n")
         else:
             # Use processed files
             for index, _, _ in files_processed:
                 temp_path = f"temp_/temp_{index-1}.mp4"
                 if Path(temp_path).exists():
-                    f.write(f"file '{temp_path}'\n")
+                    # Use relative path since filelist.txt is inside temp_ directory
+                    f.write(f"file 'temp_{index-1}.mp4'\n")
     
     # Generate output filename with range indicator
     if selected_indices and action in ['R', 'M']:
