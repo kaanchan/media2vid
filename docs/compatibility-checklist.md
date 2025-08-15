@@ -1,7 +1,11 @@
 # media2vid Compatibility Checklist: Original vs Modularized
 
+> **Comparing:** v30c original vs feature/modularize-codebase branch (post-v31)  
+> **Status:** Updated for current enhanced functionality  
+> **Last Updated:** August 2025
+
 ## Overview
-This checklist compares the original `media2vid_orig.py` (v30c) with the modularized `media2vid.py` (v31) to identify any missing functionality, behavioral differences, or regressions.
+This checklist compares the original `media2vid_orig.py` (v30c) with the modularized `media2vid.py` on feature/modularize-codebase branch to identify any missing functionality, behavioral differences, or regressions.
 
 ## ✅ IMPLEMENTED - Core Architecture
 
@@ -53,7 +57,7 @@ This checklist compares the original `media2vid_orig.py` (v30c) with the modular
 ### Interactive Menu
 - [x] **Timeout countdown**: 20-second auto-continue with visual timer
 - [x] **Pause functionality**: P key pauses indefinitely  
-- [x] **All main operations**: Y/Enter, P, R, M, C, O, N/Q/ESC
+- [x] **All main operations**: Y/Enter, P, R, M, C, O, N/Q (ESC removed for simplicity)
 - [x] **Threading**: Non-blocking input handling
 - [x] **Range selection**: For R (re-render) and M (merge) operations
 

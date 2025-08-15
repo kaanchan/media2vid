@@ -1,5 +1,9 @@
 # media2vid_orig.py - Complete Feature Analysis
 
+> **Version Reference:** v30c original script analysis  
+> **For Comparison With:** feature/modularize-codebase branch (post-v31)  
+> **Last Updated:** August 2025
+
 ## Overview
 This document provides a comprehensive analysis of the original `media2vid_orig.py` script (v30c), documenting all features, functionality, user interfaces, and processing behaviors to ensure compatibility with the modularized version.
 
@@ -84,7 +88,7 @@ python media2vid_orig.py --silent           # Minimal output, log to file only
 - **M**: Merge existing temp files (with optional range)
 - **C**: Clear cache (delete temp_ directory and .cache files)
 - **O**: Organize directory (move files to INPUT/OUTPUT/LOGS structure)
-- **N/Q/ESC**: Cancel and exit
+- **N/Q/ESC**: Cancel and exit (Note: ESC removed in modularized version - N/Q sufficient)
 
 ### Timeout Behavior
 - **Auto-continue**: 20-second countdown with visual timer

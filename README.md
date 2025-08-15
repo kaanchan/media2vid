@@ -1,8 +1,12 @@
 # media2vid
+
+> **Version:** feature/modularize-codebase branch (post-v31)  
+> **Last Updated:** August 2025  
+> **Commit:** 2f843b9 - Update test suite for enhanced functionality compatibility
+
 Generate video from assorted videos, audio recordings, and pics.
 
 Universal video montage creation script that automatically processes mixed media files 
-
 into a single concatenated video with standardized formatting.
 
 

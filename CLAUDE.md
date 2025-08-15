@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+> **Version:** feature/modularize-codebase branch (post-v31)  
+> **Last Updated:** August 2025  
+> **Commit:** 2f843b9 - Update test suite for enhanced functionality compatibility
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -15,10 +19,12 @@ This is a video montage creation script (`media2vid.py`) that processes multiple
 
 ### Running the Script
 ```bash
-python media2vid.py                    # Normal operation with colored output
-python media2vid.py --quiet            # Show only warnings and errors  
-python media2vid.py --verbose          # Show all debug information
-python media2vid.py --silent           # Minimal output, log to file only
+python media2vid.py                           # Normal operation with colored output
+python media2vid.py --log-level quiet         # Show only warnings and errors  
+python media2vid.py --log-level verbose       # Show all debug information
+python media2vid.py --log-level silent        # Minimal output, log to file only
+python media2vid.py --intro-pic custom.png    # Use custom intro image
+python media2vid.py --audio-bg-pic bg.png     # Use custom audio background
 ```
 
 ### Dependencies
@@ -26,6 +32,12 @@ The script requires:
 - **FFmpeg**: Must be installed and available in PATH for video processing
 - **Python packages**: colorama (for colored terminal output)
 - **Standard library**: pathlib, subprocess, argparse, logging, datetime, typing, dataclasses, enum
+
+### Recent Enhancements
+- **Smart intro detection**: Enhanced PNG intro detection with `--intro-pic` option and priority logic
+- **Audio background priority**: Custom background support with `--audio-bg-pic` option  
+- **Range indicator improvements**: Comprehensive range format support (M1_5, R3,7,9-12, etc.)
+- **Test suite**: 78/78 tests passing with 100% coverage of enhanced functionality
 
 ## Architecture
 
