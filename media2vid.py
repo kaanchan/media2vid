@@ -342,7 +342,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     - M: Merge specific range
     - C: Clear cache
     - O: Organize directory
-    - N/Q/ESC: Cancel and exit
+    - N/Q: Cancel and exit
     
     Returns:
         Tuple of (action, selected_indices)
@@ -351,7 +351,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         
     Note:
         C and O operations are handled immediately and exit the program.
-        ESC key support improved for better exit functionality.
+N and Q keys provide clear exit options.
     """
     
     print(f"{Fore.CYAN}=== CONFIRMATION ==={Style.RESET_ALL}")
@@ -364,7 +364,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     print(f"{Fore.MAGENTA}  <M> - Merge specified files as new output{Style.RESET_ALL}")
     print("  <C> - Clear cache (delete temp_ directory and .cache files)")
     print("  <O> - Organize directory (move files to INPUT/OUTPUT/LOGS)")
-    print(f"{Fore.RED}  <N/Q/ESC> - Cancel and exit{Style.RESET_ALL}")
+    print(f"{Fore.RED}  <N/Q> - Cancel and exit{Style.RESET_ALL}")
     print("")
     
     # Timeout functionality with pause support
@@ -380,13 +380,9 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     def get_fallback_input():
         try:
             user_input = input().strip()
-            # Handle ESC character if present
-            if '\x1b' in user_input:
-                input_result[0] = "ESC"
-            else:
-                input_result[0] = user_input.upper()
+            input_result[0] = user_input.upper()
         except (EOFError, KeyboardInterrupt):
-            input_result[0] = "ESC"
+            input_result[0] = "N"
     
     # Main countdown loop with immediate and fallback input
     while not paused and action is None:
@@ -396,7 +392,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         if remaining == 0:
             break
             
-        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q/Esc]): {Style.RESET_ALL}", 
+        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q]): {Style.RESET_ALL}", 
               end="", flush=True)
         
         # Check for input with better ESC key support
@@ -431,13 +427,13 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
                 print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
                 action = 'O'
                 break
-            elif response in ['N', 'Q', 'ESC']:
+            elif response in ['N', 'Q']:
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 raise UserInterruptError("User cancelled")
     
     # Handle paused state - wait indefinitely until user input
     while paused and action is None:
-        print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q/Esc]: {Style.RESET_ALL}", end="", flush=True)
+        print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q]: {Style.RESET_ALL}", end="", flush=True)
         
         # Reset input for paused state
         input_result[0] = None
@@ -466,7 +462,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         elif response == 'O':
             print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
             action = 'O'
-        elif response in ['N', 'Q', 'ESC']:
+        elif response in ['N', 'Q']:
             print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
             raise UserInterruptError("User cancelled")
         else:
