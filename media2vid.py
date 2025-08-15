@@ -495,30 +495,9 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         print(f"\n{Fore.GREEN}Timeout - continuing with all files...{Style.RESET_ALL}")
         action = 'Y'
     
-    # Handle range selection for R and M operations
+    # Handle range selection for R and M operations (ORIGINAL pattern)
     selected_indices = None
     if action in ['R', 'M']:
-        # CRITICAL: Clear input buffer to prevent leftover input interference
-        import sys
-        import select
-        
-        # Clear any pending input in stdin buffer
-        try:
-            if hasattr(select, 'select'):
-                # Unix/Linux - drain input buffer
-                while sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                    sys.stdin.readline()
-            else:
-                # Windows - use msvcrt to clear buffer
-                import msvcrt
-                while msvcrt.kbhit():
-                    msvcrt.getch()
-        except:
-            pass  # Ignore any errors in buffer clearing
-        
-        # Give threads time to completely terminate
-        time.sleep(0.3)
-        
         while True:
             try:
                 range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
@@ -537,9 +516,8 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
             except (EOFError, KeyboardInterrupt):
                 raise UserInterruptError("User cancelled during range selection")
     
-    # CRITICAL: Ensure all input threads are properly terminated before returning
-    terminate_input_thread()
-    stop_input.set()  # Final cleanup signal
+    # FINAL: Wait for threads to die naturally before cleanup prompt
+    time.sleep(1.0)  # Longer wait to ensure threads complete
     
     return action, selected_indices
 
