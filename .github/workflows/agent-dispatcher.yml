@@ -1,0 +1,183 @@
+name: 🤖 Agentic Issue Dispatcher
+
+on:
+  issues:
+    types: [opened, labeled, edited]
+  workflow_dispatch:
+    inputs:
+      issue_numbers:
+        description: 'Comma-separated issue numbers to process'
+        required: true
+        type: string
+      agent_type:
+        description: 'Type of agent to use'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+        - auto
+        - menu-refactor
+        - cache-optimizer
+        - test-fixer
+
+jobs:
+  analyze-and-dispatch:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'agent-ready') || github.event_name == 'workflow_dispatch'
+    
+    outputs:
+      agent_assignments: ${{ steps.analyzer.outputs.assignments }}
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Analyze Issue and Assign Agent Type
+      id: analyzer
+      run: |
+        # Agent assignment logic based on issue content/labels
+        ISSUE_NUM="${{ github.event.issue.number || inputs.issue_numbers }}"
+        ISSUE_TITLE="${{ github.event.issue.title }}"
+        ISSUE_BODY="${{ github.event.issue.body }}"
+        
+        # Determine agent type
+        if [[ "$ISSUE_TITLE" =~ (menu|input|prompt|cleanup) ]]; then
+          AGENT_TYPE="menu-refactor"
+        elif [[ "$ISSUE_TITLE" =~ (cache|performance|optimization) ]]; then
+          AGENT_TYPE="cache-optimizer"  
+        elif [[ "$ISSUE_TITLE" =~ (test|fix.*test|expectation) ]]; then
+          AGENT_TYPE="test-fixer"
+        else
+          AGENT_TYPE="${{ inputs.agent_type || 'general' }}"
+        fi
+        
+        echo "assignments=${ISSUE_NUM}:${AGENT_TYPE}" >> $GITHUB_OUTPUT
+        echo "🤖 Assigned Issue #${ISSUE_NUM} to ${AGENT_TYPE} agent" >> $GITHUB_STEP_SUMMARY
+  
+  spawn-agents:
+    needs: analyze-and-dispatch
+    strategy:
+      matrix:
+        assignment: ${{ fromJSON(format('["{0}"]', needs.analyze-and-dispatch.outputs.agent_assignments)) }}
+      max-parallel: 3  # Limit concurrent agents
+      fail-fast: false
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Parse Assignment
+      id: parse
+      run: |
+        ASSIGNMENT="${{ matrix.assignment }}"
+        ISSUE_NUM="${ASSIGNMENT%%:*}"
+        AGENT_TYPE="${ASSIGNMENT##*:}"
+        echo "issue_num=${ISSUE_NUM}" >> $GITHUB_OUTPUT
+        echo "agent_type=${AGENT_TYPE}" >> $GITHUB_OUTPUT
+        
+    - name: Create Agent Branch
+      run: |
+        ISSUE_NUM="${{ steps.parse.outputs.issue_num }}"
+        AGENT_TYPE="${{ steps.parse.outputs.agent_type }}"
+        BRANCH_NAME="agent/${AGENT_TYPE}-issue-${ISSUE_NUM}"
+        
+        git config --global user.name "Claude Agent"
+        git config --global user.email "agent@claude.ai"
+        
+        git checkout -b "${BRANCH_NAME}"
+        git push -u origin "${BRANCH_NAME}"
+        
+        echo "🌿 Created branch: ${BRANCH_NAME}" >> $GITHUB_STEP_SUMMARY
+        
+    - name: Create Agent Instructions
+      run: |
+        ISSUE_NUM="${{ steps.parse.outputs.issue_num }}"
+        AGENT_TYPE="${{ steps.parse.outputs.agent_type }}"
+        
+        mkdir -p .agents
+        cat > ".agents/agent-${ISSUE_NUM}-instructions.md" << EOF
+        # Agent Instructions - Issue #${ISSUE_NUM}
+        
+        **Agent Type:** ${AGENT_TYPE}
+        **Branch:** agent/${AGENT_TYPE}-issue-${ISSUE_NUM}
+        **Issue:** https://github.com/${{ github.repository }}/issues/${ISSUE_NUM}
+        
+        ## Task
+        Process Issue #${ISSUE_NUM} according to ${AGENT_TYPE} specialization.
+        
+        ## Agent Workflow
+        1. Analyze issue requirements
+        2. Create implementation plan
+        3. Execute changes with proper testing
+        4. Create pull request with detailed description
+        5. Update issue with progress
+        
+        ## Coordination
+        - Check for conflicts with other concurrent agents
+        - Update this file with progress status
+        - Create PR when ready for review
+        
+        ## Status: INITIALIZED
+        **Started:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        **Agent ID:** agent-${AGENT_TYPE}-${ISSUE_NUM}
+        EOF
+        
+        git add .agents/
+        git commit -m "🤖 Initialize ${AGENT_TYPE} agent for issue #${ISSUE_NUM}
+
+        Agent spawned for automated processing of issue #${ISSUE_NUM}.
+        Branch: agent/${AGENT_TYPE}-issue-${ISSUE_NUM}
+        
+        🤖 Generated with Claude Agent Dispatcher"
+        git push origin "agent/${AGENT_TYPE}-issue-${ISSUE_NUM}"
+        
+    - name: Trigger Claude Code Session
+      run: |
+        ISSUE_NUM="${{ steps.parse.outputs.issue_num }}"
+        AGENT_TYPE="${{ steps.parse.outputs.agent_type }}"
+        
+        # Create agent session command
+        echo "🚀 Ready to spawn Claude Code agent!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Run this command to start the agent:**" >> $GITHUB_STEP_SUMMARY
+        echo '```bash' >> $GITHUB_STEP_SUMMARY
+        echo "claude-code --session agent-${AGENT_TYPE}-${ISSUE_NUM}" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Agent will work on:** Issue #${ISSUE_NUM} (${AGENT_TYPE})" >> $GITHUB_STEP_SUMMARY
+        
+    - name: Comment on Issue
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issueNum = ${{ steps.parse.outputs.issue_num }};
+          const agentType = '${{ steps.parse.outputs.agent_type }}';
+          const branchName = `agent/${agentType}-issue-${issueNum}`;
+          
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: issueNum,
+            body: `🤖 **Agent Spawned!**
+            
+            **Agent Type:** \`${agentType}\`
+            **Branch:** \`${branchName}\`
+            **Status:** Initialized
+            
+            An autonomous agent has been assigned to work on this issue. The agent will:
+            1. ✅ Create implementation plan
+            2. ⏳ Execute changes with testing  
+            3. ⏳ Create pull request
+            4. ⏳ Update issue with results
+            
+            **To start the agent:**
+            \`\`\`bash
+            claude-code --session agent-${agentType}-${issueNum}
+            \`\`\`
+            
+            🤖 Generated with Claude Agent Dispatcher`
+          });
