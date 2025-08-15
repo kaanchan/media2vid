@@ -367,159 +367,163 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     print(f"{Fore.RED}  <N/Q> - Cancel and exit{Style.RESET_ALL}")
     print("")
     
-    # Input handling with proper thread termination
+    # Sequential input handling - prevent multiple competing threads
     input_result = [None]
     input_thread = None
-    stop_input = threading.Event()
+    input_lock = threading.Lock()  # Prevent concurrent input threads
     
-    def get_fallback_input():
+    def get_single_input():
+        """Single input handler using sys.stdin.readline() for better thread behavior."""
         try:
-            user_input = input().strip()
-            if not stop_input.is_set():  # Only set result if not stopped
-                input_result[0] = user_input.upper()
+            import sys
+            user_input = sys.stdin.readline().strip()
+            input_result[0] = user_input.upper()
         except (EOFError, KeyboardInterrupt):
-            if not stop_input.is_set():
-                input_result[0] = "N"
+            input_result[0] = "N"
     
-    def terminate_input_thread():
-        """Properly terminate the active input thread."""
+    def wait_for_input():
+        """Ensure only one input thread exists at a time."""
         nonlocal input_thread
-        if input_thread and input_thread.is_alive():
-            stop_input.set()  # Signal thread to stop processing
-            input_thread.join(timeout=0.1)  # Wait briefly for termination
-            input_thread = None
-            stop_input.clear()  # Reset for next use
+        with input_lock:  # Acquire lock to prevent concurrent threads
+            if input_thread and input_thread.is_alive():
+                input_thread.join()  # Wait for any existing thread to complete
+            
+            # Only reset result if we don't have one yet - DON'T WIPE EXISTING INPUT!
+            if input_result[0] is None:
+                new_thread = threading.Thread(target=get_single_input, daemon=True, name="sequential_input")
+                new_thread.start()
+                return new_thread
+            return None  # Don't start new thread if we already have input
     
-    # Timeout functionality with pause support (restored original)
+    # Timeout functionality with pause support - ensure cleanup with try/finally
     timeout_seconds = 20
     paused = False
     start_time = time.time()
     action = None
     
-    # Main countdown loop with original input handling
-    while not paused and action is None:
-        elapsed = time.time() - start_time
-        remaining = max(0, timeout_seconds - int(elapsed))
-        
-        if remaining == 0:
-            break
+    try:
+        # Main countdown loop with original input handling
+        while not paused and action is None:
+            elapsed = time.time() - start_time
+            remaining = max(0, timeout_seconds - int(elapsed))
             
-        print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q]): {Style.RESET_ALL}", 
-              end="", flush=True)
-        
-        # Check for input with better ESC key support (original pattern)
-        if input_thread is None or not input_thread.is_alive():
-            input_thread = threading.Thread(target=get_fallback_input, daemon=True)
-            input_thread.start()
-        
-        # Check fallback input (Enter-based)
-        if input_result[0] is not None:
+            if remaining == 0:
+                break
+                
+            print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q]): {Style.RESET_ALL}", 
+                  end="", flush=True)
+            
+            # Start input thread if not already running and we don't have input yet
+            if input_thread is None or not input_thread.is_alive():
+                new_thread = wait_for_input()
+                if new_thread:  # Only update if we actually started a new thread
+                    input_thread = new_thread
+            
+            # Check for user input (don't reset the result)
+            if input_result[0] is not None:
+                response = input_result[0]
+                
+                if response in ['Y', '']:
+                    print(f"\n{Fore.GREEN}Continuing immediately...{Style.RESET_ALL}")
+                    action = 'Y'
+                    break
+                elif response == 'P':
+                    paused = True
+                    print(f"\n{Fore.YELLOW}Countdown PAUSED. Press [Y/Enter] to continue, R for range, M for merge, C to clear cache, O to organize, or [N/Q/Esc] to cancel.{Style.RESET_ALL}")
+                    break
+                elif response == 'R':
+                    print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
+                    action = 'R'
+                    break
+                elif response == 'M':
+                    print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
+                    action = 'M'
+                    break
+                elif response == 'C':
+                    print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
+                    action = 'C'
+                    break
+                elif response == 'O':
+                    print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
+                    action = 'O'
+                    break
+                elif response in ['N', 'Q']:
+                    print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
+                    raise UserInterruptError("User cancelled")
+            
+            time.sleep(0.1)
+    
+        # Handle paused state using sequential input
+        while paused and action is None:
+            print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q]: {Style.RESET_ALL}", end="", flush=True)
+            
+            # Use sequential input for paused state
+            input_thread = wait_for_input()
+            
+            # Wait for input indefinitely when paused
+            while input_result[0] is None:
+                time.sleep(0.1)
+            
             response = input_result[0]
-            terminate_input_thread()  # CRITICAL: Kill thread immediately after response
             
             if response in ['Y', '']:
-                print(f"\n{Fore.GREEN}Continuing immediately...{Style.RESET_ALL}")
+                print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
                 action = 'Y'
-                break
-            elif response == 'P':
-                paused = True
-                print(f"\n{Fore.YELLOW}Countdown PAUSED. Press [Y/Enter] to continue, R for range, M for merge, C to clear cache, O to organize, or [N/Q/Esc] to cancel.{Style.RESET_ALL}")
-                break
             elif response == 'R':
                 print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
                 action = 'R'
-                break
             elif response == 'M':
                 print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
                 action = 'M'
-                break
             elif response == 'C':
                 print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
                 action = 'C'
-                break
             elif response == 'O':
                 print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
                 action = 'O'
-                break
             elif response in ['N', 'Q']:
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 raise UserInterruptError("User cancelled")
+            else:
+                print(f"\n{Fore.RED}Invalid option: {response}. Please try again.{Style.RESET_ALL}")
+                # Reset and try again
+                input_result[0] = None
+            break  # Exit paused loop when action is set
         
-        time.sleep(0.1)
-    
-    # Handle paused state - wait indefinitely until user input 
-    while paused and action is None:
-        print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q]: {Style.RESET_ALL}", end="", flush=True)
-        
-        # Reset input for paused state
-        input_result[0] = None
-        stop_input.clear()  # Reset stop signal
-        paused_input_thread = threading.Thread(target=get_fallback_input, daemon=True)
-        paused_input_thread.start()
-        
-        # Wait for input indefinitely when paused
-        while input_result[0] is None:
-            time.sleep(0.1)
-        
-        response = input_result[0]
-        # Terminate paused thread immediately after response
-        stop_input.set()
-        paused_input_thread.join(timeout=0.1)
-        
-        if response in ['Y', '']:
-            print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
+        # If timeout occurred, default to Y
+        if action is None:
+            print(f"\n{Fore.GREEN}Timeout - continuing with all files...{Style.RESET_ALL}")
             action = 'Y'
-        elif response == 'R':
-            print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
-            action = 'R'
-        elif response == 'M':
-            print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
-            action = 'M'
-        elif response == 'C':
-            print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
-            action = 'C'
-        elif response == 'O':
-            print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
-            action = 'O'
-        elif response in ['N', 'Q']:
-            print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
-            raise UserInterruptError("User cancelled")
-        else:
-            print(f"\n{Fore.RED}Invalid option: {response}. Please try again.{Style.RESET_ALL}")
-            # Reset and try again
-            input_result[0] = None
-        break  # Exit paused loop when action is set
-    
-    # If timeout occurred, default to Y
-    if action is None:
-        print(f"\n{Fore.GREEN}Timeout - continuing with all files...{Style.RESET_ALL}")
-        action = 'Y'
-    
-    # Handle range selection for R and M operations (ORIGINAL pattern)
-    selected_indices = None
-    if action in ['R', 'M']:
-        while True:
-            try:
-                range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
-                
-                if not range_input:
-                    selected_indices = None
-                    break
-                else:
-                    # Use the parse_range function from utils
-                    from src.utils import parse_range
-                    # We need to get the total number of files to pass to parse_range
-                    # This will be handled in the calling function
-                    selected_indices = range_input
-                    break
+        
+        # Handle range selection for R and M operations (ORIGINAL pattern)
+        selected_indices = None
+        if action in ['R', 'M']:
+            while True:
+                try:
+                    range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
                     
-            except (EOFError, KeyboardInterrupt):
-                raise UserInterruptError("User cancelled during range selection")
-    
-    # FINAL: Wait for threads to die naturally before cleanup prompt
-    time.sleep(1.0)  # Longer wait to ensure threads complete
-    
-    return action, selected_indices
+                    if not range_input:
+                        selected_indices = None
+                        break
+                    else:
+                        # Use the parse_range function from utils
+                        from src.utils import parse_range
+                        # We need to get the total number of files to pass to parse_range
+                        # This will be handled in the calling function
+                        selected_indices = range_input
+                        break
+                        
+                except (EOFError, KeyboardInterrupt):
+                    raise UserInterruptError("User cancelled during range selection")
+        
+        return action, selected_indices
+        
+    finally:
+        # CRITICAL: Always cleanup threads, even if exceptions are raised
+        if input_thread and input_thread.is_alive():
+            # Note: Cannot interrupt daemon threads blocked on input()
+            # They will terminate when main program exits
+            pass
 
 def handle_special_operations(action: str) -> None:
     """
@@ -608,36 +612,50 @@ def determine_files_to_process(action: str, selected_indices: Optional[str], pro
 def get_user_input_with_timeout_cleanup() -> bool:
     """
     Handle cleanup prompt with 5-second timeout defaulting to preserve files.
-    Now properly isolated from main menu threads.
+    Uses sequential thread prevention to avoid double input issues.
     
     Returns:
         True if user wants to delete temp files, False otherwise (default)
     """
-    import queue
+    import sys
     
-    input_queue = queue.Queue()
+    # Sequential input handling - prevent multiple competing threads
+    input_result = [None]
+    input_lock = threading.Lock()
     
-    def get_input():
+    def get_single_input():
+        """Single input handler using sys.stdin.readline() for better thread behavior."""
         try:
-            user_input = input().strip().lower()
-            input_queue.put(user_input)
+            user_input = sys.stdin.readline().strip().lower()
+            input_result[0] = user_input
         except (EOFError, KeyboardInterrupt):
-            input_queue.put("n")
+            input_result[0] = "n"
+    
+    def wait_for_input():
+        """Ensure only one input thread exists at a time."""
+        with input_lock:
+            # Reset result and start new thread
+            input_result[0] = None
+            new_thread = threading.Thread(target=get_single_input, daemon=True, name="cleanup_input")
+            new_thread.start()
+            return new_thread
     
     print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
     
-    # Start clean input thread (main menu threads are now properly cleaned up)
-    input_thread = threading.Thread(target=get_input, daemon=True, name="cleanup_input")
-    input_thread.start()
+    # Start input thread
+    input_thread = wait_for_input()
     
     # Wait up to 5 seconds for input
-    try:
-        response = input_queue.get(timeout=5.0)
-        print(f"\n{Fore.CYAN}Response: {response if response else 'n'}{Style.RESET_ALL}")
-        return response in ['y', 'yes']
-    except queue.Empty:
-        print("n (timed out)")
-        return False
+    start_time = time.time()
+    while time.time() - start_time < 5.0:
+        if input_result[0] is not None:
+            response = input_result[0]
+            print(f"\n{Fore.CYAN}Response: {response if response else 'n'}{Style.RESET_ALL}")
+            return response in ['y', 'yes']
+        time.sleep(0.1)
+    
+    print("n (timed out)")
+    return False
 
 def create_final_output(files_processed: List[Tuple[int, str, str]], action: str, selected_indices: Optional[str], temp_files_for_merge: List[str] = None, processing_order: List[Tuple[int, str, str]] = None) -> bool:
     """Create the final concatenated output video."""
