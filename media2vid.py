@@ -351,7 +351,7 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         
     Note:
         C and O operations are handled immediately and exit the program.
-N and Q keys provide clear exit options.
+        N and Q keys provide clear exit options.
     """
     
     print(f"{Fore.CYAN}=== CONFIRMATION ==={Style.RESET_ALL}")
@@ -367,24 +367,36 @@ N and Q keys provide clear exit options.
     print(f"{Fore.RED}  <N/Q> - Cancel and exit{Style.RESET_ALL}")
     print("")
     
-    # Timeout functionality with pause support
+    # Input handling with proper thread termination
+    input_result = [None]
+    input_thread = None
+    stop_input = threading.Event()
+    
+    def get_fallback_input():
+        try:
+            user_input = input().strip()
+            if not stop_input.is_set():  # Only set result if not stopped
+                input_result[0] = user_input.upper()
+        except (EOFError, KeyboardInterrupt):
+            if not stop_input.is_set():
+                input_result[0] = "N"
+    
+    def terminate_input_thread():
+        """Properly terminate the active input thread."""
+        nonlocal input_thread
+        if input_thread and input_thread.is_alive():
+            stop_input.set()  # Signal thread to stop processing
+            input_thread.join(timeout=0.1)  # Wait briefly for termination
+            input_thread = None
+            stop_input.clear()  # Reset for next use
+    
+    # Timeout functionality with pause support (restored original)
     timeout_seconds = 20
     paused = False
     start_time = time.time()
     action = None
     
-    # Use threading for fallback input (Enter-based)
-    input_result = [None]
-    input_thread = None
-    
-    def get_fallback_input():
-        try:
-            user_input = input().strip()
-            input_result[0] = user_input.upper()
-        except (EOFError, KeyboardInterrupt):
-            input_result[0] = "N"
-    
-    # Main countdown loop with immediate and fallback input
+    # Main countdown loop with original input handling
     while not paused and action is None:
         elapsed = time.time() - start_time
         remaining = max(0, timeout_seconds - int(elapsed))
@@ -395,7 +407,7 @@ N and Q keys provide clear exit options.
         print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q]): {Style.RESET_ALL}", 
               end="", flush=True)
         
-        # Check for input with better ESC key support
+        # Check for input with better ESC key support (original pattern)
         if input_thread is None or not input_thread.is_alive():
             input_thread = threading.Thread(target=get_fallback_input, daemon=True)
             input_thread.start()
@@ -403,6 +415,8 @@ N and Q keys provide clear exit options.
         # Check fallback input (Enter-based)
         if input_result[0] is not None:
             response = input_result[0]
+            terminate_input_thread()  # CRITICAL: Kill thread immediately after response
+            
             if response in ['Y', '']:
                 print(f"\n{Fore.GREEN}Continuing immediately...{Style.RESET_ALL}")
                 action = 'Y'
@@ -430,15 +444,16 @@ N and Q keys provide clear exit options.
             elif response in ['N', 'Q']:
                 print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
                 raise UserInterruptError("User cancelled")
+        
+        time.sleep(0.1)
     
-    # Handle paused state - wait indefinitely until user input
+    # Handle paused state - wait indefinitely until user input 
     while paused and action is None:
         print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q]: {Style.RESET_ALL}", end="", flush=True)
         
         # Reset input for paused state
         input_result[0] = None
-        paused_input_thread = None
-        
+        stop_input.clear()  # Reset stop signal
         paused_input_thread = threading.Thread(target=get_fallback_input, daemon=True)
         paused_input_thread.start()
         
@@ -447,6 +462,10 @@ N and Q keys provide clear exit options.
             time.sleep(0.1)
         
         response = input_result[0]
+        # Terminate paused thread immediately after response
+        stop_input.set()
+        paused_input_thread.join(timeout=0.1)
+        
         if response in ['Y', '']:
             print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
             action = 'Y'
@@ -479,6 +498,27 @@ N and Q keys provide clear exit options.
     # Handle range selection for R and M operations
     selected_indices = None
     if action in ['R', 'M']:
+        # CRITICAL: Clear input buffer to prevent leftover input interference
+        import sys
+        import select
+        
+        # Clear any pending input in stdin buffer
+        try:
+            if hasattr(select, 'select'):
+                # Unix/Linux - drain input buffer
+                while sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+                    sys.stdin.readline()
+            else:
+                # Windows - use msvcrt to clear buffer
+                import msvcrt
+                while msvcrt.kbhit():
+                    msvcrt.getch()
+        except:
+            pass  # Ignore any errors in buffer clearing
+        
+        # Give threads time to completely terminate
+        time.sleep(0.3)
+        
         while True:
             try:
                 range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
@@ -496,6 +536,10 @@ N and Q keys provide clear exit options.
                     
             except (EOFError, KeyboardInterrupt):
                 raise UserInterruptError("User cancelled during range selection")
+    
+    # CRITICAL: Ensure all input threads are properly terminated before returning
+    terminate_input_thread()
+    stop_input.set()  # Final cleanup signal
     
     return action, selected_indices
 
@@ -583,66 +627,10 @@ def determine_files_to_process(action: str, selected_indices: Optional[str], pro
     
     return [], temp_files_for_merge
 
-def get_user_input_with_timeout_cleanup_direct() -> bool:
-    """
-    Handle cleanup prompt with 5-second timeout using direct keyboard input.
-    Bypasses threading to avoid conflicts with leftover input threads.
-    
-    Returns:
-        True if user wants to delete temp files, False otherwise (default)
-    """
-    import sys
-    import msvcrt
-    import time
-    
-    # Clear any pending input in the buffer first
-    while msvcrt.kbhit():
-        msvcrt.getch()
-        print("[DEBUG] Cleared pending input from buffer")
-    
-    print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
-    
-    start_time = time.time()
-    input_chars = []
-    
-    while time.time() - start_time < 5.0:
-        remaining = int(5.0 - (time.time() - start_time))
-        
-        if msvcrt.kbhit():
-            char = msvcrt.getch()
-            print(f"[DEBUG] Got char: {char}")
-            
-            # Handle special keys
-            if char == b'\r':  # Enter key
-                print("[DEBUG] Enter key detected")
-                break
-            elif char == b'\x08':  # Backspace
-                if input_chars:
-                    input_chars.pop()
-                    print(f"[DEBUG] Backspace, chars now: {input_chars}")
-            elif char in [b'y', b'Y', b'n', b'N']:
-                input_chars.clear()  # Only keep the last y/n input
-                input_chars.append(char.decode('ascii').lower())
-                print(f"[DEBUG] Valid char '{char.decode('ascii')}', chars now: {input_chars}")
-                print(char.decode('ascii'), end="", flush=True)
-            else:
-                print(f"[DEBUG] Ignored char: {char}")
-        
-        time.sleep(0.1)
-    
-    # Process result
-    if input_chars:
-        response = ''.join(input_chars).strip().lower()
-        print(f"\n{Fore.CYAN}Response: {response}{Style.RESET_ALL}")
-        return response in ['y', 'yes']
-    else:
-        print("\nn (timed out)")
-        return False
-
 def get_user_input_with_timeout_cleanup() -> bool:
     """
     Handle cleanup prompt with 5-second timeout defaulting to preserve files.
-    Uses queue-based approach to avoid thread conflicts.
+    Now properly isolated from main menu threads.
     
     Returns:
         True if user wants to delete temp files, False otherwise (default)
@@ -660,8 +648,8 @@ def get_user_input_with_timeout_cleanup() -> bool:
     
     print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
     
-    # Start input thread with queue
-    input_thread = threading.Thread(target=get_input, daemon=True, name="cleanup_input_queue")
+    # Start clean input thread (main menu threads are now properly cleaned up)
+    input_thread = threading.Thread(target=get_input, daemon=True, name="cleanup_input")
     input_thread.start()
     
     # Wait up to 5 seconds for input
@@ -871,37 +859,9 @@ def main() -> int:
         if success:
             logger.info(f"{get_icon('✅', 'SUCCESS:')} Video montage creation completed successfully!")
             
-            # Offer cleanup with 5-second timeout (like original)
-            # DEBUG: Check for leftover threads
-            import threading
-            active_threads = threading.active_count()
-            logger.debug(f"Active threads before cleanup: {active_threads}")
-            for thread in threading.enumerate():
-                if thread != threading.current_thread():
-                    logger.debug(f"  - {thread.name}: {thread.is_alive()}")
-            
-            # Clean up any leftover input threads before cleanup prompt
-            logger.debug("Attempting to clean up leftover input threads...")
-            
-            # Give any finishing threads a moment to complete
-            time.sleep(0.5)
-            
-            # Check again after brief wait
-            remaining_threads = []
-            for thread in threading.enumerate():
-                if thread != threading.current_thread():
-                    remaining_threads.append(f"{thread.name}: {thread.is_alive()}")
-                    if 'fallback_input' in thread.name or 'get_input' in thread.name:
-                        logger.warning(f"Leftover input thread detected: {thread.name} (alive: {thread.is_alive()})")
-            
-            if remaining_threads:
-                logger.debug(f"Threads still active after cleanup attempt: {remaining_threads}")
-                logger.info("Using direct keyboard input to avoid thread conflicts")
-            else:
-                logger.debug("All input threads cleaned up successfully")
-            
-            # Use a different approach - bypass threading entirely for cleanup
-            should_cleanup = get_user_input_with_timeout_cleanup_direct()
+            # Offer cleanup with 5-second timeout
+            # Main menu threads are now properly cleaned up via get_user_action() 
+            should_cleanup = get_user_input_with_timeout_cleanup()
             
             if should_cleanup:
                 temp_dir = Path("temp_")
