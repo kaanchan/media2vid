@@ -457,6 +457,9 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
         while paused and action is None:
             print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q]: {Style.RESET_ALL}", end="", flush=True)
             
+            # Reset input result for fresh paused input
+            input_result[0] = None
+            
             # Use sequential input for paused state
             input_thread = wait_for_input()
             
