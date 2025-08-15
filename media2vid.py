@@ -583,57 +583,95 @@ def determine_files_to_process(action: str, selected_indices: Optional[str], pro
     
     return [], temp_files_for_merge
 
-def get_user_input_with_timeout_cleanup() -> bool:
+def get_user_input_with_timeout_cleanup_direct() -> bool:
     """
-    Handle cleanup prompt with 5-second timeout defaulting to preserve files.
+    Handle cleanup prompt with 5-second timeout using direct keyboard input.
+    Bypasses threading to avoid conflicts with leftover input threads.
     
     Returns:
         True if user wants to delete temp files, False otherwise (default)
     """
+    import sys
+    import msvcrt
+    import time
+    
+    # Clear any pending input in the buffer first
+    while msvcrt.kbhit():
+        msvcrt.getch()
+        print("[DEBUG] Cleared pending input from buffer")
+    
     print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
     
-    # Use threading for non-blocking input with timeout
-    input_result = [None]
-    
-    def get_input():
-        try:
-            input_result[0] = input().strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            input_result[0] = "n"
-    
-    # Start input thread
-    input_thread = threading.Thread(target=get_input, daemon=True)
-    input_thread.start()
-    
-    # Wait up to 5 seconds for input with countdown display
     start_time = time.time()
-    last_remaining = 5
+    input_chars = []
     
     while time.time() - start_time < 5.0:
-        if input_result[0] is not None:
-            break
+        remaining = int(5.0 - (time.time() - start_time))
         
-        # Calculate remaining time and update display
-        elapsed = time.time() - start_time
-        remaining = max(0, 5 - int(elapsed))
-        
-        # Only update display when remaining time changes
-        if remaining != last_remaining:
-            # Clear the line and reprint with new countdown
-            print(f"\r{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in {remaining} seconds): {Style.RESET_ALL}", end="", flush=True)
-            last_remaining = remaining
+        if msvcrt.kbhit():
+            char = msvcrt.getch()
+            print(f"[DEBUG] Got char: {char}")
+            
+            # Handle special keys
+            if char == b'\r':  # Enter key
+                print("[DEBUG] Enter key detected")
+                break
+            elif char == b'\x08':  # Backspace
+                if input_chars:
+                    input_chars.pop()
+                    print(f"[DEBUG] Backspace, chars now: {input_chars}")
+            elif char in [b'y', b'Y', b'n', b'N']:
+                input_chars.clear()  # Only keep the last y/n input
+                input_chars.append(char.decode('ascii').lower())
+                print(f"[DEBUG] Valid char '{char.decode('ascii')}', chars now: {input_chars}")
+                print(char.decode('ascii'), end="", flush=True)
+            else:
+                print(f"[DEBUG] Ignored char: {char}")
         
         time.sleep(0.1)
     
-    # Get result or default to 'n'
-    response = input_result[0] if input_result[0] is not None else "n"
-    
-    if input_result[0] is None:
-        print("n (timed out)")
+    # Process result
+    if input_chars:
+        response = ''.join(input_chars).strip().lower()
+        print(f"\n{Fore.CYAN}Response: {response}{Style.RESET_ALL}")
+        return response in ['y', 'yes']
     else:
-        print()  # Add newline after user input
+        print("\nn (timed out)")
+        return False
+
+def get_user_input_with_timeout_cleanup() -> bool:
+    """
+    Handle cleanup prompt with 5-second timeout defaulting to preserve files.
+    Uses queue-based approach to avoid thread conflicts.
     
-    return response in ['y', 'yes']
+    Returns:
+        True if user wants to delete temp files, False otherwise (default)
+    """
+    import queue
+    
+    input_queue = queue.Queue()
+    
+    def get_input():
+        try:
+            user_input = input().strip().lower()
+            input_queue.put(user_input)
+        except (EOFError, KeyboardInterrupt):
+            input_queue.put("n")
+    
+    print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
+    
+    # Start input thread with queue
+    input_thread = threading.Thread(target=get_input, daemon=True, name="cleanup_input_queue")
+    input_thread.start()
+    
+    # Wait up to 5 seconds for input
+    try:
+        response = input_queue.get(timeout=5.0)
+        print(f"\n{Fore.CYAN}Response: {response if response else 'n'}{Style.RESET_ALL}")
+        return response in ['y', 'yes']
+    except queue.Empty:
+        print("n (timed out)")
+        return False
 
 def create_final_output(files_processed: List[Tuple[int, str, str]], action: str, selected_indices: Optional[str], temp_files_for_merge: List[str] = None, processing_order: List[Tuple[int, str, str]] = None) -> bool:
     """Create the final concatenated output video."""
@@ -834,7 +872,36 @@ def main() -> int:
             logger.info(f"{get_icon('✅', 'SUCCESS:')} Video montage creation completed successfully!")
             
             # Offer cleanup with 5-second timeout (like original)
-            should_cleanup = get_user_input_with_timeout_cleanup()
+            # DEBUG: Check for leftover threads
+            import threading
+            active_threads = threading.active_count()
+            logger.debug(f"Active threads before cleanup: {active_threads}")
+            for thread in threading.enumerate():
+                if thread != threading.current_thread():
+                    logger.debug(f"  - {thread.name}: {thread.is_alive()}")
+            
+            # Clean up any leftover input threads before cleanup prompt
+            logger.debug("Attempting to clean up leftover input threads...")
+            
+            # Give any finishing threads a moment to complete
+            time.sleep(0.5)
+            
+            # Check again after brief wait
+            remaining_threads = []
+            for thread in threading.enumerate():
+                if thread != threading.current_thread():
+                    remaining_threads.append(f"{thread.name}: {thread.is_alive()}")
+                    if 'fallback_input' in thread.name or 'get_input' in thread.name:
+                        logger.warning(f"Leftover input thread detected: {thread.name} (alive: {thread.is_alive()})")
+            
+            if remaining_threads:
+                logger.debug(f"Threads still active after cleanup attempt: {remaining_threads}")
+                logger.info("Using direct keyboard input to avoid thread conflicts")
+            else:
+                logger.debug("All input threads cleaned up successfully")
+            
+            # Use a different approach - bypass threading entirely for cleanup
+            should_cleanup = get_user_input_with_timeout_cleanup_direct()
             
             if should_cleanup:
                 temp_dir = Path("temp_")

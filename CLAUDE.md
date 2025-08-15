@@ -105,3 +105,4 @@ All processed videos are standardized to:
 - Frame rate: 30fps
 - Video codec: H.264 (yuv420p)
 - Audio codec: AAC (48kHz, stereo)
+- Continue to prompt me with logical next step with menu driven interactions as you have before. For example, after a code update, ask if it should be verified with a test run. If that passes, then ask if I'd like to update the issue as resolved. Then ask if code can be committed against resolved issue number.
