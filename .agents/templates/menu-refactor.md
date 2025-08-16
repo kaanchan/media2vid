@@ -80,6 +80,27 @@ def get_input_with_countdown(
 - Maintain existing user experience where appropriate
 - Add any new functionality requested in issue
 
+## Pre-Commit Coordination Protocol
+
+**CRITICAL: Always check for conflicts before major commits**
+
+```bash
+# Before any significant commit:
+git fetch origin main
+git log --oneline HEAD..origin/main  # Check what's new in main
+
+# If main has new commits, rebase:
+if [ "$(git rev-list --count HEAD..origin/main)" -gt 0 ]; then
+    echo "🔄 Main branch updated - rebasing..."
+    git rebase origin/main
+    # Resolve any conflicts
+    # Re-test after rebase
+fi
+
+# Only then commit and push:
+git push origin $(git branch --show-current)
+```
+
 ## Quality Standards
 
 - ✅ Single keypress response (no double input requirement)
@@ -89,6 +110,7 @@ def get_input_with_countdown(
 - ✅ Error handling for all edge cases
 - ✅ Maintains existing functionality
 - ✅ Cross-platform compatibility
+- ✅ **Conflict-free integration with main branch**
 
 ## Deliverables
 

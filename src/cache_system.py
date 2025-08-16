@@ -105,21 +105,12 @@ def get_cache_info(cmd: List[str], file_type: str, filename: str) -> Dict:
             duration_str = cmd[i + 1] if i + 1 < len(cmd) else '15'
             try:
                 command_duration = float(duration_str)
-            except ValueError:
-                command_duration = 15.0
-                
-            # Get actual source file duration
-            try:
-                duration_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', filename]
-                result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
-                format_info = json.loads(result.stdout)
-                source_duration = float(format_info['format']['duration'])
-                
-                # Use minimum of source duration and command duration (for cropping)
-                expected_params['duration'] = min(source_duration, command_duration)
-            except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError):
-                # If we can't get source duration, fall back to command duration
+                # FIXED: Use command duration directly for deterministic cache keys
+                # The actual output duration will be min(source, command) but for caching
+                # we only care that the -t parameter hasn't changed
                 expected_params['duration'] = command_duration
+            except ValueError:
+                expected_params['duration'] = 15.0
             
         i += 1
     
@@ -253,9 +244,9 @@ def is_cached_file_valid(temp_file_path: Path, source_file_path: str, cache_info
                 print(f"{Fore.YELLOW}  -> Cache invalid: sample rate mismatch (expected {expected_sr}Hz, got {actual_sr}Hz){Style.RESET_ALL}")
                 return False
         
-        # Validate duration if expected (with tolerance for encoding variations)
+        # Validate duration if expected (with intelligent tolerance)
         if 'duration' in current_expected:
-            expected_duration = float(current_expected['duration'])
+            expected_command_duration = float(current_expected['duration'])
             # Get actual duration using ffprobe
             try:
                 duration_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', str(temp_file_path)]
@@ -263,10 +254,11 @@ def is_cached_file_valid(temp_file_path: Path, source_file_path: str, cache_info
                 format_info = json.loads(result.stdout)
                 actual_duration = float(format_info['format']['duration'])
                 
-                # Allow 0.5 second tolerance for encoding variations
-                duration_diff = abs(actual_duration - expected_duration)
-                if duration_diff > 0.5:
-                    print(f"{Fore.YELLOW}  -> Cache invalid: duration mismatch (expected {expected_duration}s, got {actual_duration}s){Style.RESET_ALL}")
+                # FIXED: Validate that actual duration is <= command duration (due to min() operation)
+                # Allow tolerance for encoding variations and the fact that actual duration
+                # might be min(source_duration, command_duration)
+                if actual_duration > expected_command_duration + 0.5:
+                    print(f"{Fore.YELLOW}  -> Cache invalid: actual duration ({actual_duration}s) exceeds command duration ({expected_command_duration}s){Style.RESET_ALL}")
                     return False
             except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError):
                 # If we can't get duration, don't fail validation
