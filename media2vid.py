@@ -145,6 +145,7 @@ def display_processing_order(processing_order: List[Tuple[int, str, str]], ignor
 def get_overwrite_confirmation(filename: str) -> bool:
     """
     Get overwrite confirmation with 3-second timeout defaulting to No.
+    Now uses the unified get_input_with_countdown() function.
     
     Args:
         filename: Name of file that would be overwritten
@@ -152,34 +153,17 @@ def get_overwrite_confirmation(filename: str) -> bool:
     Returns:
         True if user wants to overwrite, False otherwise
     """
-    print(f"{Fore.YELLOW}File exists: {filename} - Overwrite? (y/N - defaults to N in 3 seconds): {Style.RESET_ALL}", 
-          end="", flush=True)
+    response, timed_out = get_input_with_countdown(
+        prompt_text=f"File exists: {filename} - Overwrite? (y/N): ",
+        countdown_time=3,
+        accepted_keys=['Y', 'N', ''],
+        default_response='N',
+        enable_pause=False,
+        show_options=True,
+        case_sensitive=False
+    )
     
-    # Use threading for non-blocking input with timeout
-    input_result = [None]
-    
-    def get_input():
-        try:
-            input_result[0] = input().strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            input_result[0] = "n"
-    
-    # Start input thread
-    input_thread = threading.Thread(target=get_input, daemon=True)
-    input_thread.start()
-    
-    # Wait up to 3 seconds for input
-    start_time = time.time()
-    while time.time() - start_time < 3.0:
-        if input_result[0] is not None:
-            break
-        time.sleep(0.1)
-    
-    # Default to "n" if timeout
-    response = input_result[0] or "n"
-    print(f"\n{Fore.CYAN}Response: {response}{Style.RESET_ALL}")
-    
-    return response.lower() in ['y', 'yes']
+    return response.upper() in ['Y', 'YES']
 
 def clear_cache() -> None:
     """
@@ -334,6 +318,7 @@ def organize_directory() -> None:
 def get_user_action() -> Tuple[str, Optional[List[int]]]:
     """
     Handle user confirmation with timeout, pause functionality, and range selection.
+    Now uses the unified get_input_with_countdown() function for consistent behavior.
     
     Presents options menu and handles user input with 20-second timeout:
     - Y/Enter: Continue with all files
@@ -367,166 +352,55 @@ def get_user_action() -> Tuple[str, Optional[List[int]]]:
     print(f"{Fore.RED}  <N/Q> - Cancel and exit{Style.RESET_ALL}")
     print("")
     
-    # Sequential input handling - prevent multiple competing threads
-    input_result = [None]
-    input_thread = None
-    input_lock = threading.Lock()  # Prevent concurrent input threads
+    # Use unified input function with pause support
+    action, timed_out = get_input_with_countdown(
+        prompt_text="Auto-continuing in {} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q]): ",
+        countdown_time=20,
+        accepted_keys=['Y', '', 'P', 'R', 'M', 'C', 'O', 'N', 'Q'],
+        default_response='Y',
+        enable_pause=True,
+        show_options=True,  # Use the dynamic countdown formatting
+        case_sensitive=False
+    )
     
-    def get_single_input():
-        """Single input handler using sys.stdin.readline() for better thread behavior."""
-        try:
-            import sys
-            user_input = sys.stdin.readline().strip()
-            input_result[0] = user_input.upper()
-        except (EOFError, KeyboardInterrupt):
-            input_result[0] = "N"
+    # Handle the response
+    if action in ['N', 'Q']:
+        print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
+        raise UserInterruptError("User cancelled")
+    elif action == 'Y' or action == '':
+        print(f"\n{Fore.GREEN}Continuing with all files...{Style.RESET_ALL}")
+        action = 'Y'
+    elif action == 'R':
+        print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
+    elif action == 'M':
+        print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
+    elif action == 'C':
+        print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
+    elif action == 'O':
+        print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
     
-    def wait_for_input():
-        """Ensure only one input thread exists at a time."""
-        nonlocal input_thread
-        with input_lock:  # Acquire lock to prevent concurrent threads
-            if input_thread and input_thread.is_alive():
-                input_thread.join()  # Wait for any existing thread to complete
-            
-            # Only reset result if we don't have one yet - DON'T WIPE EXISTING INPUT!
-            if input_result[0] is None:
-                new_thread = threading.Thread(target=get_single_input, daemon=True, name="sequential_input")
-                new_thread.start()
-                return new_thread
-            return None  # Don't start new thread if we already have input
-    
-    # Timeout functionality with pause support - ensure cleanup with try/finally
-    timeout_seconds = 20
-    paused = False
-    start_time = time.time()
-    action = None
-    
-    try:
-        # Main countdown loop with original input handling
-        while not paused and action is None:
-            elapsed = time.time() - start_time
-            remaining = max(0, timeout_seconds - int(elapsed))
-            
-            if remaining == 0:
-                break
+    # Handle range selection for R and M operations
+    selected_indices = None
+    if action in ['R', 'M']:
+        while True:
+            try:
+                range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
                 
-            print(f"\r{Fore.CYAN}Auto-continuing in {remaining} seconds... ([Y/Enter]/P/R=re-render/M=merge/C/O/[N/Q]): {Style.RESET_ALL}", 
-                  end="", flush=True)
-            
-            # Start input thread if not already running and we don't have input yet
-            if input_thread is None or not input_thread.is_alive():
-                new_thread = wait_for_input()
-                if new_thread:  # Only update if we actually started a new thread
-                    input_thread = new_thread
-            
-            # Check for user input (don't reset the result)
-            if input_result[0] is not None:
-                response = input_result[0]
-                
-                if response in ['Y', '']:
-                    print(f"\n{Fore.GREEN}Continuing immediately...{Style.RESET_ALL}")
-                    action = 'Y'
+                if not range_input:
+                    selected_indices = None
                     break
-                elif response == 'P':
-                    paused = True
-                    print(f"\n{Fore.YELLOW}Countdown PAUSED. Press [Y/Enter] to continue, R for range, M for merge, C to clear cache, O to organize, or [N/Q/Esc] to cancel.{Style.RESET_ALL}")
+                else:
+                    # Use the parse_range function from utils
+                    from src.utils import parse_range
+                    # We need to get the total number of files to pass to parse_range
+                    # This will be handled in the calling function
+                    selected_indices = range_input
                     break
-                elif response == 'R':
-                    print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
-                    action = 'R'
-                    break
-                elif response == 'M':
-                    print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
-                    action = 'M'
-                    break
-                elif response == 'C':
-                    print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
-                    action = 'C'
-                    break
-                elif response == 'O':
-                    print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
-                    action = 'O'
-                    break
-                elif response in ['N', 'Q']:
-                    print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
-                    raise UserInterruptError("User cancelled")
-            
-            time.sleep(0.1)
-    
-        # Handle paused state using sequential input
-        while paused and action is None:
-            print(f"\n{Fore.YELLOW}PAUSED - Options: [Y/Enter]/R/M/C/O/[N/Q]: {Style.RESET_ALL}", end="", flush=True)
-            
-            # Reset input result for fresh paused input
-            input_result[0] = None
-            
-            # Use sequential input for paused state
-            input_thread = wait_for_input()
-            
-            # Wait for input indefinitely when paused
-            while input_result[0] is None:
-                time.sleep(0.1)
-            
-            response = input_result[0]
-            
-            if response in ['Y', '']:
-                print(f"\n{Fore.GREEN}Resuming...{Style.RESET_ALL}")
-                action = 'Y'
-            elif response == 'R':
-                print(f"\n{Fore.CYAN}Re-render mode selected.{Style.RESET_ALL}")
-                action = 'R'
-            elif response == 'M':
-                print(f"\n{Fore.MAGENTA}Merge mode selected.{Style.RESET_ALL}")
-                action = 'M'
-            elif response == 'C':
-                print(f"\n{Fore.WHITE}Clear cache selected.{Style.RESET_ALL}")
-                action = 'C'
-            elif response == 'O':
-                print(f"\n{Fore.WHITE}Organize directory selected.{Style.RESET_ALL}")
-                action = 'O'
-            elif response in ['N', 'Q']:
-                print(f"\n{Fore.RED}Cancelled by user.{Style.RESET_ALL}")
-                raise UserInterruptError("User cancelled")
-            else:
-                print(f"\n{Fore.RED}Invalid option: {response}. Please try again.{Style.RESET_ALL}")
-                # Reset and try again
-                input_result[0] = None
-            break  # Exit paused loop when action is set
-        
-        # If timeout occurred, default to Y
-        if action is None:
-            print(f"\n{Fore.GREEN}Timeout - continuing with all files...{Style.RESET_ALL}")
-            action = 'Y'
-        
-        # Handle range selection for R and M operations (ORIGINAL pattern)
-        selected_indices = None
-        if action in ['R', 'M']:
-            while True:
-                try:
-                    range_input = input(f"{Fore.YELLOW}Enter range (e.g., '3', '1-5', '3-', '1,3,5', or Enter for all): {Style.RESET_ALL}").strip()
                     
-                    if not range_input:
-                        selected_indices = None
-                        break
-                    else:
-                        # Use the parse_range function from utils
-                        from src.utils import parse_range
-                        # We need to get the total number of files to pass to parse_range
-                        # This will be handled in the calling function
-                        selected_indices = range_input
-                        break
-                        
-                except (EOFError, KeyboardInterrupt):
-                    raise UserInterruptError("User cancelled during range selection")
-        
-        return action, selected_indices
-        
-    finally:
-        # CRITICAL: Always cleanup threads, even if exceptions are raised
-        if input_thread and input_thread.is_alive():
-            # Note: Cannot interrupt daemon threads blocked on input()
-            # They will terminate when main program exits
-            pass
+            except (EOFError, KeyboardInterrupt):
+                raise UserInterruptError("User cancelled during range selection")
+    
+    return action, selected_indices
 
 def handle_special_operations(action: str) -> None:
     """
@@ -612,53 +486,195 @@ def determine_files_to_process(action: str, selected_indices: Optional[str], pro
     
     return [], temp_files_for_merge
 
-def get_user_input_with_timeout_cleanup() -> bool:
+def get_input_with_countdown(
+    prompt_text: str,
+    countdown_time: int = 5,
+    accepted_keys: Optional[List[str]] = None,
+    default_response: Optional[str] = None,
+    enable_pause: bool = False,
+    show_options: bool = True,
+    case_sensitive: bool = False
+) -> Tuple[str, bool]:
     """
-    Handle cleanup prompt with 5-second timeout defaulting to preserve files.
-    Uses sequential thread prevention to avoid double input issues.
+    Unified input function with countdown timer - replaces all input+timeout implementations.
     
+    This function consolidates the input handling logic used throughout the codebase,
+    providing consistent behavior for all user prompts with timeout functionality.
+    Uses the proven sequential threading approach to prevent input interference.
+    
+    Args:
+        prompt_text: The text to display to the user
+        countdown_time: Timeout duration in seconds (default: 5)
+        accepted_keys: List of valid input keys (None = accept any)
+        default_response: What to return on timeout (None = empty string)
+        enable_pause: Whether to support 'P' to pause countdown
+        show_options: Whether to show countdown timer
+        case_sensitive: Whether input matching is case sensitive
+        
     Returns:
-        True if user wants to delete temp files, False otherwise (default)
+        Tuple of (user_input, timed_out)
+        - user_input: The processed user input or default_response
+        - timed_out: True if timeout occurred, False if user provided input
+        
+    Examples:
+        # Simple y/N prompt with 5-second timeout
+        response, timed_out = get_input_with_countdown(
+            "Delete files? (y/N): ", 5, ['y', 'n', ''], 'n'
+        )
+        
+        # Complex menu with pause functionality
+        response, timed_out = get_input_with_countdown(
+            "Choose option: ", 20, ['Y', 'P', 'R', 'M', 'C', 'O', 'N', 'Q'], 
+            'Y', enable_pause=True
+        )
     """
     import sys
+    from colorama import Fore, Style
     
     # Sequential input handling - prevent multiple competing threads
     input_result = [None]
     input_lock = threading.Lock()
+    paused = False
     
     def get_single_input():
         """Single input handler using sys.stdin.readline() for better thread behavior."""
         try:
-            user_input = sys.stdin.readline().strip().lower()
-            input_result[0] = user_input
+            user_input = sys.stdin.readline().strip()
+            if case_sensitive:
+                input_result[0] = user_input
+            else:
+                input_result[0] = user_input.upper()
         except (EOFError, KeyboardInterrupt):
-            input_result[0] = "n"
+            input_result[0] = default_response or ""
     
     def wait_for_input():
         """Ensure only one input thread exists at a time."""
+        nonlocal input_thread
         with input_lock:
-            # Reset result and start new thread
-            input_result[0] = None
-            new_thread = threading.Thread(target=get_single_input, daemon=True, name="cleanup_input")
-            new_thread.start()
-            return new_thread
+            # Only start new thread if we don't have input yet
+            if input_result[0] is None:
+                new_thread = threading.Thread(target=get_single_input, daemon=True, name="unified_input")
+                new_thread.start()
+                return new_thread
+            return None
     
-    print(f"{Fore.YELLOW}Delete temp directory and files? (y/N - defaults to N in 5 seconds): {Style.RESET_ALL}", end="", flush=True)
-    
-    # Start input thread
-    input_thread = wait_for_input()
-    
-    # Wait up to 5 seconds for input
+    # Initialize
+    input_thread = None
     start_time = time.time()
-    while time.time() - start_time < 5.0:
-        if input_result[0] is not None:
-            response = input_result[0]
-            print(f"\n{Fore.CYAN}Response: {response if response else 'n'}{Style.RESET_ALL}")
-            return response in ['y', 'yes']
-        time.sleep(0.1)
     
-    print("n (timed out)")
-    return False
+    try:
+        # Main countdown loop
+        while not paused:
+            elapsed = time.time() - start_time
+            remaining = max(0, countdown_time - int(elapsed))
+            
+            if remaining == 0:
+                break
+                
+            if show_options:
+                if "{}" in prompt_text:
+                    # Handle dynamic countdown in prompt text
+                    formatted_prompt = prompt_text.format(remaining)
+                    print(f"\r{Fore.CYAN}{formatted_prompt}{Style.RESET_ALL}", end="", flush=True)
+                else:
+                    print(f"\r{prompt_text}{Fore.CYAN}({remaining}s){Style.RESET_ALL} ", end="", flush=True)
+            else:
+                if "{}" in prompt_text:
+                    formatted_prompt = prompt_text.format(remaining)
+                    print(f"\r{formatted_prompt}", end="", flush=True)
+                else:
+                    print(f"\r{prompt_text}", end="", flush=True)
+            
+            # Start input thread if needed
+            if input_thread is None or not input_thread.is_alive():
+                new_thread = wait_for_input()
+                if new_thread:
+                    input_thread = new_thread
+            
+            # Check for user input
+            if input_result[0] is not None:
+                response = input_result[0]
+                
+                # Handle pause functionality
+                if enable_pause and response == 'P':
+                    paused = True
+                    print(f"\n{Fore.YELLOW}Countdown PAUSED. Enter choice or press Y to continue:{Style.RESET_ALL}")
+                    # Reset input for paused state
+                    input_result[0] = None
+                    break
+                    
+                # Validate against accepted keys if specified
+                if accepted_keys is not None:
+                    if response in accepted_keys:
+                        print(f"\n{Fore.GREEN}Selection: {response}{Style.RESET_ALL}")
+                        return response, False
+                    else:
+                        print(f"\n{Fore.RED}Invalid option: {response}. Valid options: {', '.join(accepted_keys)}{Style.RESET_ALL}")
+                        # Reset and continue
+                        input_result[0] = None
+                        continue
+                else:
+                    print(f"\n{Fore.GREEN}Input: {response}{Style.RESET_ALL}")
+                    return response, False
+            
+            time.sleep(0.1)
+        
+        # Handle paused state
+        while paused:
+            print(f"\n{Fore.YELLOW}PAUSED - Enter your choice: {Style.RESET_ALL}", end="", flush=True)
+            
+            # Reset input for paused state
+            input_result[0] = None
+            input_thread = wait_for_input()
+            
+            # Wait for input indefinitely when paused
+            while input_result[0] is None:
+                time.sleep(0.1)
+            
+            response = input_result[0]
+            
+            # Validate input in paused state
+            if accepted_keys is not None:
+                if response in accepted_keys:
+                    print(f"\n{Fore.GREEN}Selection: {response}{Style.RESET_ALL}")
+                    return response, False
+                else:
+                    print(f"\n{Fore.RED}Invalid option: {response}. Valid options: {', '.join(accepted_keys)}{Style.RESET_ALL}")
+                    continue
+            else:
+                print(f"\n{Fore.GREEN}Input: {response}{Style.RESET_ALL}")
+                return response, False
+        
+        # If timeout occurred, use default
+        default = default_response or ""
+        if show_options:
+            print(f"\n{Fore.YELLOW}Timeout - using default: {default}{Style.RESET_ALL}")
+        return default, True
+        
+    finally:
+        # Cleanup - daemon threads will terminate when main program exits
+        pass
+
+def get_user_input_with_timeout_cleanup() -> bool:
+    """
+    Handle cleanup prompt with 5-second timeout defaulting to preserve files.
+    Now uses the unified get_input_with_countdown() function.
+    
+    Returns:
+        True if user wants to delete temp files, False otherwise (default)
+    """
+    response, timed_out = get_input_with_countdown(
+        prompt_text="Delete temp directory and files? (y/N): ",
+        countdown_time=5,
+        accepted_keys=['Y', 'N', ''],
+        default_response='N',
+        enable_pause=False,
+        show_options=True,
+        case_sensitive=False
+    )
+    
+    # Convert response to boolean
+    return response.upper() in ['Y', 'YES']
 
 def create_final_output(files_processed: List[Tuple[int, str, str]], action: str, selected_indices: Optional[str], temp_files_for_merge: List[str] = None, processing_order: List[Tuple[int, str, str]] = None) -> bool:
     """Create the final concatenated output video."""
