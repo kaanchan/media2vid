@@ -59,6 +59,42 @@ gh workflow run agent-dispatcher.yml -f issue_numbers="18,19,20" -f agent_type="
 4. **PR Creation**: Agents create PRs when ready for human review
 5. **Conflict Resolution**: Agents check for merge conflicts before creating PRs
 
+### **CRITICAL: Pre-Commit Coordination Protocol**
+
+Every agent MUST follow this before any major commit:
+
+```bash
+# 1. Check for main branch updates
+git fetch origin main
+
+# 2. Check if rebase is needed
+COMMITS_BEHIND=$(git rev-list --count HEAD..origin/main)
+if [ "$COMMITS_BEHIND" -gt 0 ]; then
+    echo "🔄 Main branch has $COMMITS_BEHIND new commits - rebasing..."
+    
+    # 3. Rebase against latest main
+    git rebase origin/main
+    
+    # 4. If conflicts, resolve them
+    if [ $? -ne 0 ]; then
+        echo "⚠️  Conflicts detected - resolve manually then:"
+        echo "   git rebase --continue"
+        exit 1
+    fi
+    
+    # 5. Re-test after rebase
+    echo "✅ Rebase complete - re-testing before commit..."
+    # Run tests specific to your agent type
+fi
+
+# 6. Only then commit and push
+git add .
+git commit -m "Your commit message"
+git push origin $(git branch --show-current)
+```
+
+This ensures **true parallelism with conflict-free integration**.
+
 ## Agent Workflow
 
 ```mermaid
