@@ -1,9 +1,7 @@
 20250803
 
-- waveform for audio pausing
-- waveform should have text (audio recording submission)
-- update form to ask for optional profile pic to display for audio recording
-- duplicate title screen + Jayadeepananda (first video file) as it's own temp file
-- left/right audio channel not consistent for all videos (sometimes mono, sometimes stereo
-- see if chapter marks can be included
-- add to private YouTube playlist with ST emails only viewable
+- #25 waveform for audio pausing (https://github.com/kaanchan/media2vid/issues/25)
+- #26 update form to ask for optional profile pic to display for audio recording (https://github.com/kaanchan/media2vid/issues/26)
+- #27 see if chapter marks can be included in final merged mp4 (https://github.com/kaanchan/media2vid/issues/27)
+- #28 what other metadata would be useful to include in output file? (https://github.com/kaanchan/media2vid/issues/28)
+- #29 add to private YouTube playlist with ST emails only viewable (https://github.com/kaanchan/media2vid/issues/29)
